@@ -20,6 +20,9 @@ type rawAccount struct {
 	Parent *struct {
 		Value string `xml:",chardata"`
 	} `xml:"http://www.gnucash.org/XML/act parent"`
+	Commodity struct {
+		ID string `xml:"http://www.gnucash.org/XML/cmdty id"`
+	} `xml:"http://www.gnucash.org/XML/act commodity"`
 }
 
 func (a rawAccount) parentGUID() string {

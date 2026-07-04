@@ -35,6 +35,16 @@ func fullPath(a ParsedAccount, byGUID map[string]ParsedAccount) string {
 	return fullPath(parent, byGUID) + ":" + a.Name
 }
 
+// AccountByGUID returns the ParsedAccount with the given GUID.
+func AccountByGUID(book *ParsedBook, guid string) (ParsedAccount, bool) {
+	for _, a := range book.Accounts {
+		if a.GUID == guid {
+			return a, true
+		}
+	}
+	return ParsedAccount{}, false
+}
+
 // ResolveAccount returns the GUID for the given colon-separated account path.
 func ResolveAccount(book *ParsedBook, path string) (string, error) {
 	paths := AccountPaths(book)
@@ -47,12 +57,19 @@ func ResolveAccount(book *ParsedBook, path string) (string, error) {
 
 // NewTransactionXML generates a <gnc:transaction> XML fragment ready for
 // insertion into a GnuCash XML file. amount is from the bank account's
-// perspective (negative = money out).
+// perspective (negative = money out). operationAmount and operationCurrency
+// cover the case where the counterpart account is in a different currency
+// (e.g. a UAH account paying for a USD purchase): pass the foreign-currency
+// amount with the same sign as amount, and the foreign currency code. When
+// operationCurrency is empty or equal to currency the split quantities are
+// identical (same-currency behaviour).
 func NewTransactionXML(
 	sourceID, description, currency string,
 	date time.Time,
 	amount decimal.Decimal,
 	debitGUID, creditGUID string,
+	operationAmount decimal.Decimal,
+	operationCurrency string,
 ) string {
 	trnGUID := newGUID()
 	split1GUID := newGUID()
@@ -63,6 +80,14 @@ func NewTransactionXML(
 
 	debitVal := toRational(amount)
 	creditVal := toRational(amount.Neg())
+
+	// creditQty is the quantity in the counterpart account's own currency.
+	// For foreign-currency operations it differs from creditVal (which is
+	// always expressed in the transaction/home currency).
+	creditQty := creditVal
+	if operationCurrency != "" && operationCurrency != currency {
+		creditQty = toRational(operationAmount.Neg())
+	}
 
 	return fmt.Sprintf(`<gnc:transaction version="2.0.0">
   <trn:id type="guid">%s</trn:id>
@@ -95,7 +120,7 @@ func NewTransactionXML(
 		xmlEscape(description),
 		xmlEscape(sourceID),
 		split1GUID, debitVal, debitVal, debitGUID,
-		split2GUID, creditVal, creditVal, creditGUID,
+		split2GUID, creditVal, creditQty, creditGUID,
 	)
 }
 

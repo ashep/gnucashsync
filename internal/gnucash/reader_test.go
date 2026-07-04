@@ -126,6 +126,23 @@ func TestReadFile_SourceIDs(t *testing.T) {
 	}
 }
 
+func TestReadFile_AccountCurrency(t *testing.T) {
+	path := writeSampleGnuCash(t)
+	book, err := gnucash.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range book.Accounts {
+		if a.Name == "Monobank UAH" {
+			if a.Currency != "UAH" {
+				t.Errorf("expected Currency=UAH, got %q", a.Currency)
+			}
+			return
+		}
+	}
+	t.Fatal("Monobank UAH account not found")
+}
+
 func TestReadFile_InsertOffset(t *testing.T) {
 	path := writeSampleGnuCash(t)
 	book, err := gnucash.ReadFile(path)

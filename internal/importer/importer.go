@@ -6,6 +6,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/shopspring/decimal"
+
 	"github.com/ashep/gnucashsync/internal/config"
 	"github.com/ashep/gnucashsync/internal/gnucash"
 	"github.com/ashep/gnucashsync/internal/model"
@@ -14,8 +16,9 @@ import (
 
 // Options controls optional behaviour of Run.
 type Options struct {
-	DryRun bool
-	Since  time.Time // zero means no filter
+	DryRun      bool
+	Since       time.Time // zero means no filter
+	RateFetcher func() (map[string]decimal.Decimal, error)
 }
 
 // Result summarizes an import run.
@@ -87,9 +90,46 @@ func Run(src source.Source, gnucashPath string, cfg *config.Config, opts Options
 			return Result{}, err
 		}
 
+		opAmount := t.OperationAmount
+		opCurrency := t.OperationCurrency
+
+		// If Monobank did not supply a foreign-currency amount, check whether
+		// the counterpart GnuCash account is in a different currency and compute
+		// the quantity from the cached (or freshly fetched) exchange rate.
+		if opCurrency == "" {
+			if counterpart, ok := gnucash.AccountByGUID(book, creditGUID); ok && counterpart.Currency != t.Currency {
+				rate, cached := cfg.GetRate(counterpart.Currency, t.Currency)
+				if !cached {
+					fetcher := opts.RateFetcher
+					if fetcher == nil {
+						fetcher = source.FetchRates
+					}
+					rates, err := fetcher()
+					if err != nil {
+						return Result{}, fmt.Errorf("fetching exchange rates: %w", err)
+					}
+					for k, v := range rates {
+						// parse "FROM/TO" key and store in config cache
+						if len(k) == 7 && k[3] == '/' {
+							cfg.SetRate(k[:3], k[4:], v)
+						}
+					}
+					if err := cfg.Save(); err != nil {
+						log.Printf("warning: could not save rate cache: %v", err)
+					}
+					rate = cfg.GetRateOrZero(counterpart.Currency, t.Currency)
+				}
+				if !rate.IsZero() {
+					opAmount = t.Amount.Div(rate)
+					opCurrency = counterpart.Currency
+				}
+			}
+		}
+
 		xml := gnucash.NewTransactionXML(
 			t.ID, t.Description, t.Currency, t.Date, t.Amount,
 			debitGUID, creditGUID,
+			opAmount, opCurrency,
 		)
 		txnXMLs = append(txnXMLs, xml)
 		result.Transactions = append(result.Transactions, t)

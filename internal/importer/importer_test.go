@@ -1,10 +1,14 @@
 package importer_test
 
 import (
+	"bytes"
 	"compress/gzip"
 	"os"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/shopspring/decimal"
 
 	"github.com/ashep/gnucashsync/internal/config"
 	"github.com/ashep/gnucashsync/internal/importer"
@@ -24,7 +28,7 @@ const sampleXML = `<?xml version="1.0" encoding="utf-8" ?>
 <gnc:count-data cd:type="book">1</gnc:count-data>
 <gnc:book version="2.0.0">
 <book:id type="guid">a0000000000000000000000000000000</book:id>
-<gnc:count-data cd:type="account">4</gnc:count-data>
+<gnc:count-data cd:type="account">5</gnc:count-data>
 <gnc:count-data cd:type="transaction">0</gnc:count-data>
 <gnc:account version="2.0.0">
   <act:name>Root Account</act:name>
@@ -54,6 +58,14 @@ const sampleXML = `<?xml version="1.0" encoding="utf-8" ?>
   <act:commodity><cmdty:space>ISO4217</cmdty:space><cmdty:id>UAH</cmdty:id></act:commodity>
   <act:commodity-scu>100</act:commodity-scu>
   <act:parent type="guid">a0000000000000000000000000000001</act:parent>
+</gnc:account>
+<gnc:account version="2.0.0">
+  <act:name>Savings USD</act:name>
+  <act:id type="guid">a0000000000000000000000000000005</act:id>
+  <act:type>ASSET</act:type>
+  <act:commodity><cmdty:space>ISO4217</cmdty:space><cmdty:id>USD</cmdty:id></act:commodity>
+  <act:commodity-scu>100</act:commodity-scu>
+  <act:parent type="guid">a0000000000000000000000000000002</act:parent>
 </gnc:account>
 </gnc:book>
 </gnc-v2>`
@@ -219,5 +231,111 @@ func TestRun_SinceFilter(t *testing.T) {
 	}
 	if result.Transactions[0].ID != "txn-002" {
 		t.Errorf("expected txn-002 (on or after since date), got %s", result.Transactions[0].ID)
+	}
+}
+
+// crossCurrencyTxnJSON returns a JSON source with one UAH transaction (-4150 UAH)
+// that maps to the USD account "Assets:Savings USD" via MCC rule.
+func crossCurrencyTxnJSON(t *testing.T) string {
+	t.Helper()
+	f, _ := os.CreateTemp(t.TempDir(), "txns*.json")
+	f.WriteString(`[{"id":"txn-usd","date":"2026-07-01","description":"Transfer","amount":-4150.00,"currency":"UAH","account_id":"UA123","category":"6011"}]`)
+	f.Close()
+	return f.Name()
+}
+
+func crossCurrencyConfig(rateFetched bool) *config.Config {
+	cfg := &config.Config{
+		Accounts: []config.AccountEntry{
+			{
+				SourceID:       "UA123",
+				GnuCashAccount: "Assets:Monobank UAH",
+				MCCRules:       map[string]string{"6011": "Assets:Savings USD"},
+			},
+		},
+	}
+	if rateFetched {
+		// USD/UAH = 41.5 → -4150 UAH / 41.5 = -100 USD → credit qty = +10000/100
+		cfg.SetRate("USD", "UAH", decimal.NewFromFloat(41.5))
+	}
+	return cfg
+}
+
+// readBookRaw returns the decompressed bytes of the GnuCash file.
+func readBookRaw(t *testing.T, path string) []byte {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gz.Close()
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(gz); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// TestRun_CrossCurrency_UsesRateFromCache verifies that when a UAH transaction
+// maps to a USD counterpart account and the rate is already cached in config,
+// the credit split quantity is written in USD, not UAH.
+func TestRun_CrossCurrency_UsesRateFromCache(t *testing.T) {
+	path := writeSampleBook(t)
+	cfg := crossCurrencyConfig(true) // rate pre-loaded in cache
+
+	_, err := importer.Run(source.NewJSON(crossCurrencyTxnJSON(t)), path, cfg, importer.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	raw := readBookRaw(t, path)
+	// Credit split (USD account) quantity must be +10000/100 (= +100 USD).
+	// Debit split (UAH account) value/quantity must be -415000/100.
+	if !strings.Contains(string(raw), "10000/100") {
+		t.Error("expected USD credit quantity 10000/100 in book XML")
+	}
+}
+
+// TestRun_CrossCurrency_FetchesRateWhenMissing verifies that when the rate is
+// absent from config, the importer calls RateFetcher, caches the result, and
+// uses it to compute the credit split quantity.
+func TestRun_CrossCurrency_FetchesRateWhenMissing(t *testing.T) {
+	path := writeSampleBook(t)
+	cfg := crossCurrencyConfig(false) // no rate in cache
+
+	fetchCalled := false
+	fakeFetcher := func() (map[string]decimal.Decimal, error) {
+		fetchCalled = true
+		return map[string]decimal.Decimal{
+			"USD/UAH": decimal.NewFromFloat(41.5),
+		}, nil
+	}
+
+	_, err := importer.Run(source.NewJSON(crossCurrencyTxnJSON(t)), path, cfg,
+		importer.Options{RateFetcher: fakeFetcher})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !fetchCalled {
+		t.Error("expected RateFetcher to be called when rate not in cache")
+	}
+	// Rate should now be in the in-memory cache for future transactions.
+	rate, ok := cfg.GetRate("USD", "UAH")
+	if !ok {
+		t.Fatal("expected USD/UAH to be cached after fetch")
+	}
+	if !rate.Equal(decimal.NewFromFloat(41.5)) {
+		t.Errorf("cached rate: expected 41.5, got %s", rate)
+	}
+
+	raw := readBookRaw(t, path)
+	if !strings.Contains(string(raw), "10000/100") {
+		t.Error("expected USD credit quantity 10000/100 in book XML")
 	}
 }

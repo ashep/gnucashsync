@@ -5,6 +5,7 @@ import (
 	"os"
 	"regexp"
 
+	"github.com/shopspring/decimal"
 	"gopkg.in/yaml.v3"
 )
 
@@ -41,10 +42,57 @@ func (e *AccountEntry) ResolveCounterpart(description, category string) (string,
 	return account, ok
 }
 
+type currencyRateEntry struct {
+	Rate string `yaml:"rate"`
+}
+
 type Config struct {
-	Book     string         `yaml:"book"`
-	Sources  Sources        `yaml:"sources"`
-	Accounts []AccountEntry `yaml:"accounts"`
+	Path          string                       `yaml:"-"`
+	Book          string                       `yaml:"book"`
+	Sources       Sources                      `yaml:"sources"`
+	Accounts      []AccountEntry               `yaml:"accounts"`
+	CurrencyCache map[string]currencyRateEntry `yaml:"currency_cache,omitempty"`
+}
+
+// GetRate returns the cached exchange rate for the given currency pair.
+// The key is "FROM/TO", e.g. GetRate("USD","UAH") → rate meaning 1 USD = rate UAH.
+func (c *Config) GetRate(from, to string) (decimal.Decimal, bool) {
+	entry, ok := c.CurrencyCache[from+"/"+to]
+	if !ok {
+		return decimal.Zero, false
+	}
+	rate, err := decimal.NewFromString(entry.Rate)
+	if err != nil {
+		return decimal.Zero, false
+	}
+	return rate, true
+}
+
+// GetRateOrZero returns the cached rate, or zero if not found or malformed.
+func (c *Config) GetRateOrZero(from, to string) decimal.Decimal {
+	rate, _ := c.GetRate(from, to)
+	return rate
+}
+
+// SetRate stores an exchange rate in the in-memory cache. Call Save to persist.
+func (c *Config) SetRate(from, to string, rate decimal.Decimal) {
+	if c.CurrencyCache == nil {
+		c.CurrencyCache = make(map[string]currencyRateEntry)
+	}
+	c.CurrencyCache[from+"/"+to] = currencyRateEntry{Rate: rate.String()}
+}
+
+// Save writes the config (including any cached rates) back to the file it was loaded from.
+// Does nothing if Path is empty.
+func (c *Config) Save() error {
+	if c.Path == "" {
+		return nil
+	}
+	data, err := yaml.Marshal(c)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(c.Path, data, 0600)
 }
 
 func Load(path string) (*Config, error) {
@@ -56,6 +104,7 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
+	cfg.Path = path
 	for i := range cfg.Accounts {
 		for j := range cfg.Accounts[i].DescriptionRules {
 			r := &cfg.Accounts[i].DescriptionRules[j]

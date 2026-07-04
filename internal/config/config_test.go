@@ -4,6 +4,8 @@ import (
 	"os"
 	"testing"
 
+	"github.com/shopspring/decimal"
+
 	"github.com/ashep/gnucashsync/internal/config"
 )
 
@@ -21,6 +23,53 @@ func loadEntry(t *testing.T, yml, sourceID string) config.AccountEntry {
 		t.Fatalf("no mapping for %q", sourceID)
 	}
 	return entry
+}
+
+func TestConfig_SetGetRate_RoundTrip(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.SetRate("USD", "UAH", decimal.NewFromFloat(41.5))
+	rate, ok := cfg.GetRate("USD", "UAH")
+	if !ok {
+		t.Fatal("expected rate to be found after SetRate")
+	}
+	if !rate.Equal(decimal.NewFromFloat(41.5)) {
+		t.Errorf("expected 41.5, got %s", rate)
+	}
+}
+
+func TestConfig_GetRate_Missing(t *testing.T) {
+	cfg := &config.Config{}
+	_, ok := cfg.GetRate("USD", "UAH")
+	if ok {
+		t.Fatal("expected no rate on empty config")
+	}
+}
+
+func TestConfig_Save_PersistsCurrencyCache(t *testing.T) {
+	f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+	f.WriteString("book: /tmp/test.gnucash\n")
+	f.Close()
+
+	cfg, err := config.Load(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.SetRate("USD", "UAH", decimal.NewFromFloat(41.5))
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	cfg2, err := config.Load(f.Name())
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	rate, ok := cfg2.GetRate("USD", "UAH")
+	if !ok {
+		t.Fatal("expected USD/UAH rate after reload")
+	}
+	if !rate.Equal(decimal.NewFromFloat(41.5)) {
+		t.Errorf("expected 41.5 after reload, got %s", rate)
+	}
 }
 
 func TestLoad(t *testing.T) {

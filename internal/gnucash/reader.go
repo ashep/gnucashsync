@@ -15,6 +15,7 @@ type ParsedAccount struct {
 	Name       string
 	GUID       string
 	ParentGUID string
+	Currency   string
 }
 
 // ParsedBook is the result of scanning a .gnucash file.
@@ -87,6 +88,7 @@ func Parse(data []byte) (*ParsedBook, error) {
 						Name:       a.Name,
 						GUID:       a.ID.Value,
 						ParentGUID: a.parentGUID(),
+						Currency:   a.Commodity.ID,
 					})
 				}
 			case t.Name.Space == nsGnc && t.Name.Local == "transaction":

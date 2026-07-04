@@ -26,6 +26,7 @@ func TestWrite_RoundTrip(t *testing.T) {
 		decimal.NewFromFloat(-200.00),
 		"a0000000000000000000000000000003",
 		"a0000000000000000000000000000004",
+		decimal.Zero, "",
 	)
 
 	if err := gnucash.Write(book, []string{xml}, path); err != nil {
@@ -118,6 +119,7 @@ func TestWrite_CountDataUpdated(t *testing.T) {
 			decimal.NewFromFloat(-10),
 			"a0000000000000000000000000000003",
 			"a0000000000000000000000000000004",
+			decimal.Zero, "",
 		)
 	}
 
