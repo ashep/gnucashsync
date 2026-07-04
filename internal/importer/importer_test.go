@@ -76,7 +76,7 @@ func sampleConfig() *config.Config {
 			{
 				SourceID:       "UA123",
 				GnuCashAccount: "Assets:Monobank UAH",
-				MCCRules:   map[string]string{"5411": "Imbalance-UAH"},
+				MCCRules:       map[string]string{"5411": "Imbalance-UAH"},
 			},
 		},
 	}
