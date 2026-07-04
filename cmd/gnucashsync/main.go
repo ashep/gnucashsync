@@ -14,16 +14,11 @@ import (
 )
 
 func main() {
-	file := flag.String("file", "", "path to .gnucash file (required)")
-	cfg := flag.String("config", "", "path to accounts YAML config (default: ~/.gnucashsync.yml)")
+	file := flag.String("file", "", "path to .gnucash file (overrides config)")
+	cfg := flag.String("config", "", "path to accounts YAML config (default: ~/.gnucashsync.yaml)")
 	src := flag.String("source", "", "path to source file (for file-based types)")
 	typ := flag.String("type", "", "source type: json, privatbank, monobank")
 	flag.Parse()
-
-	if *file == "" {
-		flag.Usage()
-		os.Exit(1)
-	}
 
 	if *cfg == "" {
 		home, err := os.UserHomeDir()
@@ -31,6 +26,20 @@ func main() {
 			log.Fatalf("resolving home directory: %v", err)
 		}
 		*cfg = filepath.Join(home, ".gnucashsync.yaml")
+	}
+
+	conf, err := config.Load(*cfg)
+	if err != nil {
+		log.Fatalf("loading config: %v", err)
+	}
+
+	if *file == "" {
+		*file = conf.Book
+	}
+	if *file == "" {
+		fmt.Fprintln(os.Stderr, "error: --file is required (or set 'book' in config)")
+		flag.Usage()
+		os.Exit(1)
 	}
 
 	// Auto-detect type from file extension if not specified.
@@ -44,13 +53,7 @@ func main() {
 	}
 
 	if *typ == "" {
-		fmt.Fprintln(os.Stderr, "error: --type is required (json, privatbank, monobank)")
-		os.Exit(1)
-	}
-
-	conf, err := config.Load(*cfg)
-	if err != nil {
-		log.Fatalf("loading config: %v", err)
+		*typ = "monobank"
 	}
 
 	var s source.Source
@@ -71,7 +74,7 @@ func main() {
 		log.Fatalf("unknown source type %q; valid: json, privatbank, monobank", *typ)
 	}
 
-	result, err := importer.Run(s, *file, conf)
+	result, err := importer.Run(s, *file, conf, importer.Options{})
 	if err != nil {
 		log.Fatalf("import failed: %v", err)
 	}

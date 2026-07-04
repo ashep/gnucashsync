@@ -96,6 +96,9 @@ func TestRun_ImportsNewTransactions(t *testing.T) {
 	if result.SkippedDuplicate != 0 {
 		t.Errorf("expected SkippedDuplicate=0, got %d", result.SkippedDuplicate)
 	}
+	if len(result.Transactions) != 2 {
+		t.Errorf("expected 2 Transactions in result, got %d", len(result.Transactions))
+	}
 }
 
 func TestRun_SkipsDuplicates(t *testing.T) {
