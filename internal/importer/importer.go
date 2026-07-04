@@ -28,6 +28,7 @@ type Result struct {
 	Imported         int
 	SkippedDuplicate int
 	SkippedUnmapped  int
+	SkippedRule      int
 	Transactions     []model.Transaction
 }
 
@@ -84,6 +85,11 @@ func Run(src source.Source, gnucashPath string, cfg *config.Config, opts Options
 		t.Description = strings.ReplaceAll(t.Description, "\n", "; ")
 
 		counterpart, ok := entry.ResolveCounterpart(t.Description, t.Category)
+		if ok && counterpart == config.SkipAccount {
+			log.Printf("skipping transaction %q: matched SKIP rule (%s)", t.ID, t.Description)
+			result.SkippedRule++
+			continue
+		}
 		if !ok {
 			category := t.Category
 			if t.CategoryLabel != "" {

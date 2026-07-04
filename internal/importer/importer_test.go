@@ -216,6 +216,41 @@ accounts:
 	}
 }
 
+func TestRun_SkipsTransactionMatchingSkipRule(t *testing.T) {
+	path := writeSampleBook(t)
+
+	txnFile, _ := os.CreateTemp(t.TempDir(), "txns*.json")
+	txnFile.WriteString(`[{"id":"txn-skip","date":"2026-07-01","description":"Cashback reward","amount":50.00,"currency":"UAH","account_id":"UA123","category":"9999"}]`)
+	txnFile.Close()
+
+	cfgFile, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+	cfgFile.WriteString(`
+accounts:
+  - source_id: "UA123"
+    gnucash_account: "Assets:Monobank UAH"
+    description_rules:
+      - pattern: "Cashback"
+        account: SKIP
+`)
+	cfgFile.Close()
+
+	cfg, err := config.Load(cfgFile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := importer.Run(source.NewJSON(txnFile.Name()), path, cfg, importer.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Imported != 0 {
+		t.Errorf("expected Imported=0, got %d", result.Imported)
+	}
+	if result.SkippedRule != 1 {
+		t.Errorf("expected SkippedRule=1, got %d", result.SkippedRule)
+	}
+}
+
 func TestRun_SinceFilter(t *testing.T) {
 	path := writeSampleBook(t)
 	src := source.NewJSON("../../testdata/transactions.json")
