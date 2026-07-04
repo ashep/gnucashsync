@@ -95,18 +95,24 @@ func main() {
 		log.Fatalf("import failed: %v", err)
 	}
 
+	prefix := ""
 	if *dryRun {
-		for _, t := range result.Transactions {
-			desc := t.Description
-			runes := []rune(desc)
-			if len(runes) > 40 {
-				desc = string(runes[:40])
-			}
-			fmt.Printf("[dry-run] %s  %-40s  %10s %s\n",
-				t.Date.Format("2006-01-02"), desc, t.Amount.StringFixed(2), t.Currency)
+		prefix = "[dry-run] "
+	}
+
+	for _, t := range result.Transactions {
+		desc := t.Description
+		runes := []rune(desc)
+		if len(runes) > 40 {
+			desc = string(runes[:40])
 		}
-		fmt.Printf("[dry-run] Would import: %d, skip duplicates: %d, skip unmapped: %d\n",
-			result.Imported, result.SkippedDuplicate, result.SkippedUnmapped)
+		fmt.Printf("%s%s  %-40s  %10s %s\n",
+			prefix, t.Date.Format("2006-01-02"), desc, t.Amount.StringFixed(2), t.Currency)
+	}
+
+	if *dryRun {
+		fmt.Printf("%sWould import: %d, skip duplicates: %d, skip unmapped: %d\n",
+			prefix, result.Imported, result.SkippedDuplicate, result.SkippedUnmapped)
 	} else {
 		fmt.Printf("Imported: %d, Skipped (duplicates): %d, Skipped (unmapped): %d\n",
 			result.Imported, result.SkippedDuplicate, result.SkippedUnmapped)
