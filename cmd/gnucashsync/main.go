@@ -15,14 +15,22 @@ import (
 
 func main() {
 	file := flag.String("file", "", "path to .gnucash file (required)")
-	cfg := flag.String("config", "", "path to accounts YAML config (required)")
+	cfg := flag.String("config", "", "path to accounts YAML config (default: ~/.gnucashsync.yml)")
 	src := flag.String("source", "", "path to source file (for file-based types)")
 	typ := flag.String("type", "", "source type: json, privatbank, monobank")
 	flag.Parse()
 
-	if *file == "" || *cfg == "" {
+	if *file == "" {
 		flag.Usage()
 		os.Exit(1)
+	}
+
+	if *cfg == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			log.Fatalf("resolving home directory: %v", err)
+		}
+		*cfg = filepath.Join(home, ".gnucashsync.yml")
 	}
 
 	// Auto-detect type from file extension if not specified.
