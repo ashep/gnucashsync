@@ -76,7 +76,7 @@ func NewTransactionXML(
 	split2GUID := newGUID()
 
 	posted := date.UTC().Format("2006-01-02 00:00:00 +0000")
-	entered := time.Now().UTC().Format("2006-01-02 15:04:05 +0000")
+	entered := date.UTC().Format("2006-01-02 15:04:05 +0000")
 
 	debitVal := toRational(amount)
 	creditVal := toRational(amount.Neg())
