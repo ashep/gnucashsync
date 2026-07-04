@@ -3,6 +3,8 @@ package importer
 import (
 	"fmt"
 	"log"
+	"sort"
+	"time"
 
 	"github.com/ashep/gnucashsync/internal/config"
 	"github.com/ashep/gnucashsync/internal/gnucash"
@@ -13,6 +15,7 @@ import (
 // Options controls optional behaviour of Run.
 type Options struct {
 	DryRun bool
+	Since  time.Time // zero means no filter
 }
 
 // Result summarizes an import run.
@@ -36,12 +39,20 @@ func Run(src source.Source, gnucashPath string, cfg *config.Config, opts Options
 		return Result{}, fmt.Errorf("reading GnuCash file: %w", err)
 	}
 
+	sort.Slice(txns, func(i, j int) bool {
+		return txns[i].Date.Before(txns[j].Date)
+	})
+
 	var (
 		result  Result
 		txnXMLs []string
 	)
 
 	for _, t := range txns {
+		if !opts.Since.IsZero() && t.Date.Before(opts.Since) {
+			continue
+		}
+
 		if book.SourceIDs[t.ID] {
 			result.SkippedDuplicate++
 			continue
