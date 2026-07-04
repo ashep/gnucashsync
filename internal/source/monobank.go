@@ -273,7 +273,7 @@ func (s *monobankSource) get(path string) ([]byte, error) {
 	}
 
 	if resp.StatusCode == http.StatusTooManyRequests {
-		retryAfter := 10 * time.Second
+		retryAfter := 30 * time.Second
 		if v := resp.Header.Get("Retry-After"); v != "" {
 			if secs, err := strconv.Atoi(v); err == nil {
 				retryAfter = time.Duration(secs) * time.Second
