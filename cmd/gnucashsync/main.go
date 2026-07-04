@@ -83,8 +83,9 @@ func main() {
 	if *dryRun {
 		for _, t := range result.Transactions {
 			desc := t.Description
-			if len(desc) > 40 {
-				desc = desc[:40]
+			runes := []rune(desc)
+			if len(runes) > 40 {
+				desc = string(runes[:40])
 			}
 			fmt.Printf("[dry-run] %s  %-40s  %10s %s\n",
 				t.Date.Format("2006-01-02"), desc, t.Amount.StringFixed(2), t.Currency)
