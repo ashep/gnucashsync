@@ -123,7 +123,7 @@ type monobankSource struct {
 	to         time.Time
 }
 
-func NewMonobank(token string, accountIDs []string, since time.Time) Source {
+func NewMonobank(token string, accountIDs []string, since, until time.Time) Source {
 	ids := make(map[string]struct{}, len(accountIDs))
 	for _, id := range accountIDs {
 		ids[id] = struct{}{}
@@ -133,11 +133,15 @@ func NewMonobank(token string, accountIDs []string, since time.Time) Source {
 	if !since.IsZero() {
 		from = since
 	}
+	to := now
+	if !until.IsZero() {
+		to = until
+	}
 	return &monobankSource{
 		token:      token,
 		accountIDs: ids,
 		from:       from,
-		to:         now,
+		to:         to,
 	}
 }
 

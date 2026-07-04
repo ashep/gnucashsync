@@ -21,6 +21,7 @@ func main() {
 	typ := flag.String("type", "", "source type: json, privatbank, monobank")
 	dryRun := flag.Bool("dry-run", false, "simulate import without writing to disk")
 	sinceStr := flag.String("since", "", "only import transactions on or after this date (YYYY-MM-DD)")
+	untilStr := flag.String("until", "", "only import transactions on or before this date (YYYY-MM-DD)")
 	flag.Parse()
 
 	var since time.Time
@@ -30,6 +31,16 @@ func main() {
 		if err != nil {
 			log.Fatalf("invalid --since date %q: expected YYYY-MM-DD", *sinceStr)
 		}
+	}
+
+	var until time.Time
+	if *untilStr != "" {
+		var err error
+		until, err = time.ParseInLocation("2006-01-02", *untilStr, time.Local)
+		if err != nil {
+			log.Fatalf("invalid --until date %q: expected YYYY-MM-DD", *untilStr)
+		}
+		until = until.Add(24*time.Hour - time.Nanosecond) // include the full day
 	}
 
 	if *cfg == "" {
@@ -85,12 +96,12 @@ func main() {
 		for _, a := range conf.Accounts {
 			monobankIDs = append(monobankIDs, a.SourceID)
 		}
-		s = source.NewMonobank(conf.Sources.Monobank.Token, monobankIDs, since)
+		s = source.NewMonobank(conf.Sources.Monobank.Token, monobankIDs, since, until)
 	default:
 		log.Fatalf("unknown source type %q; valid: json, privatbank, monobank", *typ)
 	}
 
-	result, err := importer.Run(s, *file, conf, importer.Options{DryRun: *dryRun, Since: since})
+	result, err := importer.Run(s, *file, conf, importer.Options{DryRun: *dryRun, Since: since, Until: until})
 	if err != nil {
 		log.Fatalf("import failed: %v", err)
 	}

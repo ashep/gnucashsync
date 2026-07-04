@@ -19,6 +19,7 @@ import (
 type Options struct {
 	DryRun      bool
 	Since       time.Time // zero means no filter
+	Until       time.Time // zero means no filter
 	RateFetcher func() (map[string]decimal.Decimal, error)
 }
 
@@ -62,6 +63,9 @@ func Run(src source.Source, gnucashPath string, cfg *config.Config, opts Options
 
 	for _, t := range txns {
 		if !opts.Since.IsZero() && t.Date.Before(opts.Since) {
+			continue
+		}
+		if !opts.Until.IsZero() && t.Date.After(opts.Until) {
 			continue
 		}
 
