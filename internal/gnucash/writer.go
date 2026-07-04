@@ -3,7 +3,9 @@ package gnucash
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/xml"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -38,10 +40,36 @@ func Write(book *ParsedBook, txnXMLs []string, destPath string) error {
 
 	// Update transaction count.
 	newCount := book.TxnCount + len(txnXMLs)
-	data = txnCountWriteRE.ReplaceAll(data,
-		[]byte("${1}"+strconv.Itoa(newCount)+"${2}"))
+	if txnCountWriteRE.Find(data) != nil {
+		data = txnCountWriteRE.ReplaceAll(data,
+			[]byte("${1}"+strconv.Itoa(newCount)+"${2}"))
+	} else if newCount > 0 {
+		// Element absent (e.g. fresh empty book): insert it before </gnc:book>.
+		closeTag := []byte("</gnc:book>")
+		idx := bytes.Index(data, closeTag)
+		if idx >= 0 {
+			elem := []byte(fmt.Sprintf("\n<gnc:count-data cd:type=\"transaction\">%d</gnc:count-data>", newCount))
+			data = append(data[:idx], append(elem, data[idx:]...)...)
+		}
+	}
 
+	if err := validateXML(data); err != nil {
+		return err
+	}
 	return writeGzip(data, destPath)
+}
+
+func validateXML(data []byte) error {
+	dec := xml.NewDecoder(bytes.NewReader(data))
+	for {
+		_, err := dec.Token()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("assembled XML is not well-formed: %w", err)
+		}
+	}
 }
 
 func checkLock(path string) error {

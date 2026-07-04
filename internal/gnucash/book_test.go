@@ -69,3 +69,25 @@ func TestNewTransactionXML_Contains(t *testing.T) {
 		}
 	}
 }
+
+func TestNewTransactionXML_EscapesSpecialChars(t *testing.T) {
+	xml := gnucash.NewTransactionXML(
+		`A&B<"C>`, "desc", "UAH",
+		time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+		decimal.NewFromFloat(-100),
+		"debitguid00000000000000000000001",
+		"creditguid0000000000000000000001",
+	)
+	if strings.Contains(xml, `A&B`) {
+		t.Error("sourceID ampersand not escaped")
+	}
+	if !strings.Contains(xml, "&amp;") {
+		t.Error("expected &amp; in output")
+	}
+	if !strings.Contains(xml, "&lt;") {
+		t.Error("expected &lt; in output")
+	}
+	if !strings.Contains(xml, "&quot;") {
+		t.Error("expected &quot; in output")
+	}
+}

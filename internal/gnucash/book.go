@@ -90,10 +90,10 @@ func NewTransactionXML(
     </trn:split>
   </trn:splits>
 </gnc:transaction>
-`, trnGUID, currency,
+`, trnGUID, xmlEscape(currency),
 		posted, entered,
 		xmlEscape(description),
-		sourceID,
+		xmlEscape(sourceID),
 		split1GUID, debitVal, debitVal, debitGUID,
 		split2GUID, creditVal, creditVal, creditGUID,
 	)
