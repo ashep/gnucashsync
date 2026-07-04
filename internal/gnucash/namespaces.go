@@ -36,8 +36,10 @@ type rawSlot struct {
 }
 
 // rawSlots is the <trn:slots> container.
+// The outer <slot> element carries no namespace prefix in GnuCash XML, so
+// the struct tag uses an empty-namespace path.
 type rawSlots struct {
-	Slots []rawSlot `xml:"http://www.gnucash.org/XML/slot slot"`
+	Slots []rawSlot `xml:"slot"`
 }
 
 // rawTrn extracts only the slots from a <gnc:transaction> — we don't need
