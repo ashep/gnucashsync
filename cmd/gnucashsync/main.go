@@ -18,6 +18,7 @@ func main() {
 	cfg := flag.String("config", "", "path to accounts YAML config (default: ~/.gnucashsync.yaml)")
 	src := flag.String("source", "", "path to source file (for file-based types)")
 	typ := flag.String("type", "", "source type: json, privatbank, monobank")
+	dryRun := flag.Bool("dry-run", false, "simulate import without writing to disk")
 	flag.Parse()
 
 	if *cfg == "" {
@@ -74,11 +75,24 @@ func main() {
 		log.Fatalf("unknown source type %q; valid: json, privatbank, monobank", *typ)
 	}
 
-	result, err := importer.Run(s, *file, conf, importer.Options{})
+	result, err := importer.Run(s, *file, conf, importer.Options{DryRun: *dryRun})
 	if err != nil {
 		log.Fatalf("import failed: %v", err)
 	}
 
-	fmt.Printf("Imported: %d, Skipped (duplicates): %d, Skipped (unmapped): %d\n",
-		result.Imported, result.SkippedDuplicate, result.SkippedUnmapped)
+	if *dryRun {
+		for _, t := range result.Transactions {
+			desc := t.Description
+			if len(desc) > 40 {
+				desc = desc[:40]
+			}
+			fmt.Printf("[dry-run] %s  %-40s  %10s %s\n",
+				t.Date.Format("2006-01-02"), desc, t.Amount.StringFixed(2), t.Currency)
+		}
+		fmt.Printf("[dry-run] Would import: %d, skip duplicates: %d, skip unmapped: %d\n",
+			result.Imported, result.SkippedDuplicate, result.SkippedUnmapped)
+	} else {
+		fmt.Printf("Imported: %d, Skipped (duplicates): %d, Skipped (unmapped): %d\n",
+			result.Imported, result.SkippedDuplicate, result.SkippedUnmapped)
+	}
 }
