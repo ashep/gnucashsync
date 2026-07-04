@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -75,6 +76,8 @@ func Run(src source.Source, gnucashPath string, cfg *config.Config, opts Options
 			result.SkippedUnmapped++
 			continue
 		}
+
+		t.Description = strings.ReplaceAll(t.Description, "\n", "; ")
 
 		counterpart, ok := entry.ResolveCounterpart(t.Description, t.Category)
 		if !ok {
