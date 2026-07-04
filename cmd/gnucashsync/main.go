@@ -19,6 +19,7 @@ func main() {
 	cfg := flag.String("config", "", "path to accounts YAML config (default: ~/.gnucashsync.yaml)")
 	src := flag.String("source", "", "path to source file (for file-based types)")
 	typ := flag.String("type", "", "source type: json, privatbank, monobank")
+	account := flag.String("account", "", "only import from this source_id (default: all accounts)")
 	dryRun := flag.Bool("dry-run", false, "simulate import without writing to disk")
 	sinceStr := flag.String("since", "", "only import transactions on or after this date (YYYY-MM-DD)")
 	untilStr := flag.String("until", "", "only import transactions on or before this date (YYYY-MM-DD)")
@@ -54,6 +55,19 @@ func main() {
 	conf, err := config.Load(*cfg)
 	if err != nil {
 		log.Fatalf("loading config: %v", err)
+	}
+
+	if *account != "" {
+		var filtered []config.AccountEntry
+		for _, a := range conf.Accounts {
+			if a.SourceID == *account {
+				filtered = append(filtered, a)
+			}
+		}
+		if len(filtered) == 0 {
+			log.Fatalf("no account with source_id %q found in config", *account)
+		}
+		conf.Accounts = filtered
 	}
 
 	if *file == "" {
