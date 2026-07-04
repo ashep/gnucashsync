@@ -17,6 +17,7 @@ type jsonRecord struct {
 	Amount      decimal.Decimal `json:"amount"`
 	Currency    string          `json:"currency"`
 	AccountID   string          `json:"account_id"`
+	Category    string          `json:"category"`
 }
 
 type jsonSource struct {
@@ -52,6 +53,7 @@ func (s *jsonSource) Transactions() ([]model.Transaction, error) {
 			Amount:      r.Amount,
 			Currency:    r.Currency,
 			AccountID:   r.AccountID,
+			Category:    r.Category,
 		})
 	}
 	return txns, nil

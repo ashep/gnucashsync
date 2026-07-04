@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ashep/gnucashsync/internal/config"
 	"github.com/ashep/gnucashsync/internal/importer"
@@ -19,7 +20,17 @@ func main() {
 	src := flag.String("source", "", "path to source file (for file-based types)")
 	typ := flag.String("type", "", "source type: json, privatbank, monobank")
 	dryRun := flag.Bool("dry-run", false, "simulate import without writing to disk")
+	sinceStr := flag.String("since", "", "only import transactions on or after this date (YYYY-MM-DD)")
 	flag.Parse()
+
+	var since time.Time
+	if *sinceStr != "" {
+		var err error
+		since, err = time.ParseInLocation("2006-01-02", *sinceStr, time.Local)
+		if err != nil {
+			log.Fatalf("invalid --since date %q: expected YYYY-MM-DD", *sinceStr)
+		}
+	}
 
 	if *cfg == "" {
 		home, err := os.UserHomeDir()
@@ -70,12 +81,16 @@ func main() {
 		}
 		s = source.NewPrivatBank(*src)
 	case "monobank":
-		s = source.NewMonobank(conf.Sources.Monobank.Token)
+		var monobankIDs []string
+		for _, a := range conf.Accounts {
+			monobankIDs = append(monobankIDs, a.SourceID)
+		}
+		s = source.NewMonobank(conf.Sources.Monobank.Token, monobankIDs, since)
 	default:
 		log.Fatalf("unknown source type %q; valid: json, privatbank, monobank", *typ)
 	}
 
-	result, err := importer.Run(s, *file, conf, importer.Options{DryRun: *dryRun})
+	result, err := importer.Run(s, *file, conf, importer.Options{DryRun: *dryRun, Since: since})
 	if err != nil {
 		log.Fatalf("import failed: %v", err)
 	}

@@ -38,10 +38,10 @@ gnucashsync --file <book.gnucash> --config <accounts.yaml> [--source <file>] [--
 
 | Flag       | Required         | Description                                                                                              |
 |------------|------------------|----------------------------------------------------------------------------------------------------------|
-| `--file`   | yes              | Path to your `.gnucash` file                                                                             |
+| `--file`   | yes*             | Path to your `.gnucash` file. Can be set via the `book` key in the config instead.                       |
 | `--config` | no               | Path to your account mapping config (YAML). Defaults to `~/.gnucashsync.yaml`.                           |
 | `--source` | for file sources | Path to the input file (JSON or CSV)                                                                     |
-| `--type`   | usually          | Source type: `json`, `privatbank`, `monobank`. Auto-detected from file extension for `.json` and `.csv`. |
+| `--type`   | no               | Source type: `json`, `privatbank`, `monobank`. Auto-detected from `.json`/`.csv` extension; defaults to `monobank`. |
 
 **Examples:**
 
@@ -68,6 +68,9 @@ The config file maps source account identifiers to GnuCash account paths and set
 each.
 
 ```yaml
+# Path to your .gnucash file (can be overridden with --file on the command line)
+book: "~/finances/mybook.gnucash"
+
 # Source-specific settings
 sources:
   monobank:
@@ -143,8 +146,18 @@ and description — so the same export can be imported multiple times safely.
 
 ### Monobank
 
-Not yet implemented. The `--type monobank` flag is accepted and will return an error until the API integration is
-complete. The config key `sources.monobank.token` is reserved for the API token.
+Set your API token in the config file and run without `--source`:
+
+```bash
+gnucashsync --type monobank
+```
+
+The token is read from `sources.monobank.token`. gnucashsync fetches the last 31 days of transactions from all
+accounts on the token. Use your account IBAN as `source_id` in the account mapping — the IBAN is shown in the
+Monobank app under card details.
+
+**Rate limiting:** the Monobank API allows one statement request per 60 seconds. If you have multiple accounts,
+gnucashsync waits automatically between requests and logs progress.
 
 ## Duplicate detection
 

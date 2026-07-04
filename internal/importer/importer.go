@@ -42,7 +42,15 @@ func Run(src source.Source, gnucashPath string, cfg *config.Config, opts Options
 		return Result{}, fmt.Errorf("reading GnuCash file: %w", err)
 	}
 
+	accountOrder := make(map[string]int, len(cfg.Accounts))
+	for i, a := range cfg.Accounts {
+		accountOrder[a.SourceID] = i
+	}
 	sort.SliceStable(txns, func(i, j int) bool {
+		oi, oj := accountOrder[txns[i].AccountID], accountOrder[txns[j].AccountID]
+		if oi != oj {
+			return oi < oj
+		}
 		return txns[i].Date.Before(txns[j].Date)
 	})
 
