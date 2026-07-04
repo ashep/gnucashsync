@@ -39,7 +39,7 @@ func Run(src source.Source, gnucashPath string, cfg *config.Config, opts Options
 		return Result{}, fmt.Errorf("reading GnuCash file: %w", err)
 	}
 
-	sort.Slice(txns, func(i, j int) bool {
+	sort.SliceStable(txns, func(i, j int) bool {
 		return txns[i].Date.Before(txns[j].Date)
 	})
 

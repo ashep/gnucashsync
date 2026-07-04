@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/ashep/gnucashsync/internal/config"
 	"github.com/ashep/gnucashsync/internal/importer"
@@ -200,5 +201,23 @@ accounts:
 	}
 	if result.Imported != 1 {
 		t.Errorf("expected Imported=1, got %d", result.Imported)
+	}
+}
+
+func TestRun_SinceFilter(t *testing.T) {
+	path := writeSampleBook(t)
+	src := source.NewJSON("../../testdata/transactions.json")
+	cfg := sampleConfig()
+
+	since := time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC)
+	result, err := importer.Run(src, path, cfg, importer.Options{Since: since})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Imported != 1 {
+		t.Errorf("expected Imported=1, got %d", result.Imported)
+	}
+	if result.Transactions[0].ID != "txn-002" {
+		t.Errorf("expected txn-002 (on or after since date), got %s", result.Transactions[0].ID)
 	}
 }
