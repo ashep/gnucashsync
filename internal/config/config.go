@@ -9,6 +9,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const SkipAccount = "SKIP"
+
 type MonobankSource struct {
 	Token string `yaml:"token"`
 }

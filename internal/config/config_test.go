@@ -211,3 +211,22 @@ accounts:
 		t.Fatal("expected no match")
 	}
 }
+
+func TestResolveCounterpart_SkipRule(t *testing.T) {
+	entry := loadEntry(t, `
+accounts:
+  - source_id: "UA123"
+    gnucash_account: "Assets:Bank"
+    description_rules:
+      - pattern: "Cashback"
+        account: SKIP
+`, "UA123")
+
+	got, ok := entry.ResolveCounterpart("Cashback reward", "")
+	if !ok {
+		t.Fatal("expected match")
+	}
+	if got != config.SkipAccount {
+		t.Errorf("got %q, want %q", got, config.SkipAccount)
+	}
+}
