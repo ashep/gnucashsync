@@ -89,10 +89,16 @@ func Run(src source.Source, gnucashPath string, cfg *config.Config, opts Options
 			if t.CategoryLabel != "" {
 				category += " (" + t.CategoryLabel + ")"
 			}
-			return Result{}, fmt.Errorf(
+			msg := fmt.Sprintf(
 				"no counterpart configured for account %q category %s\n  transaction: %s | %s %s | %s",
 				t.AccountID, category, t.Date.Format("2006-01-02"), t.Amount.StringFixed(2), t.Currency, t.Description,
 			)
+			if !opts.DryRun {
+				return Result{}, fmt.Errorf("%s", msg)
+			}
+			log.Printf("warning: %s", msg)
+			result.SkippedUnmapped++
+			continue
 		}
 
 		debitGUID, err := gnucash.ResolveAccount(book, entry.GnuCashAccount)
