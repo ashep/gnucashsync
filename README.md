@@ -39,7 +39,7 @@ gnucashsync --file <book.gnucash> --config <accounts.yaml> [--source <file>] [--
 | Flag       | Required         | Description                                                                                              |
 |------------|------------------|----------------------------------------------------------------------------------------------------------|
 | `--file`   | yes              | Path to your `.gnucash` file                                                                             |
-| `--config` | no               | Path to your account mapping config (YAML). Defaults to `~/.gnucashsync.yml`.                           |
+| `--config` | no               | Path to your account mapping config (YAML). Defaults to `~/.gnucashsync.yaml`.                           |
 | `--source` | for file sources | Path to the input file (JSON or CSV)                                                                     |
 | `--type`   | usually          | Source type: `json`, `privatbank`, `monobank`. Auto-detected from file extension for `.json` and `.csv`. |
 

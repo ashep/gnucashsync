@@ -30,7 +30,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("resolving home directory: %v", err)
 		}
-		*cfg = filepath.Join(home, ".gnucashsync.yml")
+		*cfg = filepath.Join(home, ".gnucashsync.yaml")
 	}
 
 	// Auto-detect type from file extension if not specified.
