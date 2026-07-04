@@ -6,20 +6,26 @@ import (
 
 	"github.com/ashep/gnucashsync/internal/config"
 	"github.com/ashep/gnucashsync/internal/gnucash"
+	"github.com/ashep/gnucashsync/internal/model"
 	"github.com/ashep/gnucashsync/internal/source"
 )
+
+// Options controls optional behaviour of Run.
+type Options struct {
+	DryRun bool
+}
 
 // Result summarizes an import run.
 type Result struct {
 	Imported         int
 	SkippedDuplicate int
 	SkippedUnmapped  int
+	Transactions     []model.Transaction
 }
 
-// Run reads transactions from src, imports new ones into gnucashPath, and
-// returns a summary. Account paths must exist in the GnuCash book or the
-// function returns an error.
-func Run(src source.Source, gnucashPath string, cfg *config.Config) (Result, error) {
+// Run reads transactions from src, imports new ones into gnucashPath (skipped
+// when opts.DryRun is true), and returns a summary.
+func Run(src source.Source, gnucashPath string, cfg *config.Config, opts Options) (Result, error) {
 	txns, err := src.Transactions()
 	if err != nil {
 		return Result{}, fmt.Errorf("reading source: %w", err)
@@ -63,7 +69,12 @@ func Run(src source.Source, gnucashPath string, cfg *config.Config) (Result, err
 			debitGUID, creditGUID,
 		)
 		txnXMLs = append(txnXMLs, xml)
+		result.Transactions = append(result.Transactions, t)
 		result.Imported++
+	}
+
+	if opts.DryRun {
+		return result, nil
 	}
 
 	if err := gnucash.Write(book, txnXMLs, gnucashPath); err != nil {

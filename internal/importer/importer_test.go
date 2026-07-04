@@ -86,7 +86,7 @@ func TestRun_ImportsNewTransactions(t *testing.T) {
 	src := source.NewJSON("../../testdata/transactions.json")
 	cfg := sampleConfig()
 
-	result, err := importer.Run(src, path, cfg)
+	result, err := importer.Run(src, path, cfg, importer.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,10 +104,10 @@ func TestRun_SkipsDuplicates(t *testing.T) {
 	cfg := sampleConfig()
 
 	// First run.
-	importer.Run(src, path, cfg)
+	importer.Run(src, path, cfg, importer.Options{})
 
 	// Second run — same source, should be all duplicates.
-	result, err := importer.Run(src, path, cfg)
+	result, err := importer.Run(src, path, cfg, importer.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,11 +125,42 @@ func TestRun_SkipsUnmapped(t *testing.T) {
 	// Config with no matching account — all should be skipped as unmapped.
 	cfg := &config.Config{}
 
-	result, err := importer.Run(src, path, cfg)
+	result, err := importer.Run(src, path, cfg, importer.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.SkippedUnmapped != 2 {
 		t.Errorf("expected SkippedUnmapped=2, got %d", result.SkippedUnmapped)
+	}
+}
+
+func TestRun_DryRunDoesNotWrite(t *testing.T) {
+	path := writeSampleBook(t)
+	info, _ := os.Stat(path)
+	before := info.ModTime()
+
+	src := source.NewJSON("../../testdata/transactions.json")
+	cfg := sampleConfig()
+
+	result, err := importer.Run(src, path, cfg, importer.Options{DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	info, _ = os.Stat(path)
+	if info.ModTime() != before {
+		t.Error("dry-run modified the file")
+	}
+	if result.Imported != 2 {
+		t.Errorf("expected Imported=2, got %d", result.Imported)
+	}
+	if len(result.Transactions) != 2 {
+		t.Errorf("expected 2 transactions in result, got %d", len(result.Transactions))
+	}
+	if result.Transactions[0].ID != "txn-001" {
+		t.Errorf("expected first transaction ID txn-001, got %s", result.Transactions[0].ID)
+	}
+	if result.Transactions[1].ID != "txn-002" {
+		t.Errorf("expected second transaction ID txn-002, got %s", result.Transactions[1].ID)
 	}
 }
