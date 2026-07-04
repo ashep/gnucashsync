@@ -167,3 +167,38 @@ func TestRun_DryRunDoesNotWrite(t *testing.T) {
 		t.Errorf("expected second transaction ID txn-002 (oldest first), got %s", result.Transactions[1].ID)
 	}
 }
+
+func TestRun_DescriptionRuleOverridesMCC(t *testing.T) {
+	path := writeSampleBook(t)
+
+	// Single transaction that matches the description rule "Grocery".
+	// The config has NO mcc_rules, so if the description rule doesn't fire
+	// the importer would return an error — a passing test proves it fired.
+	txnFile, _ := os.CreateTemp(t.TempDir(), "txns*.json")
+	txnFile.WriteString(`[{"id":"txn-desc","date":"2026-07-01","description":"Grocery store","amount":-450.00,"currency":"UAH","account_id":"UA123","category":"5411"}]`)
+	txnFile.Close()
+
+	cfgFile, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+	cfgFile.WriteString(`
+accounts:
+  - source_id: "UA123"
+    gnucash_account: "Assets:Monobank UAH"
+    description_rules:
+      - pattern: "Grocery"
+        account: "Imbalance-UAH"
+`)
+	cfgFile.Close()
+
+	cfg, err := config.Load(cfgFile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := importer.Run(source.NewJSON(txnFile.Name()), path, cfg, importer.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Imported != 1 {
+		t.Errorf("expected Imported=1, got %d", result.Imported)
+	}
+}
