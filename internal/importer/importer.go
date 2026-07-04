@@ -54,12 +54,24 @@ func Run(src source.Source, gnucashPath string, cfg *config.Config, opts Options
 			continue
 		}
 
+		counterpart, ok := entry.ResolveCounterpart(t.Description, t.Category)
+		if !ok {
+			category := t.Category
+			if t.CategoryLabel != "" {
+				category += " (" + t.CategoryLabel + ")"
+			}
+			return Result{}, fmt.Errorf(
+				"no counterpart configured for account %q category %s\n  transaction: %s | %s %s | %s",
+				t.AccountID, category, t.Date.Format("2006-01-02"), t.Amount.StringFixed(2), t.Currency, t.Description,
+			)
+		}
+
 		debitGUID, err := gnucash.ResolveAccount(book, entry.GnuCashAccount)
 		if err != nil {
 			return Result{}, err
 		}
 
-		creditGUID, err := gnucash.ResolveAccount(book, entry.DefaultCounterpart)
+		creditGUID, err := gnucash.ResolveAccount(book, counterpart)
 		if err != nil {
 			return Result{}, err
 		}

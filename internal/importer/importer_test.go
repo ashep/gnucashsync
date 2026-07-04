@@ -73,9 +73,9 @@ func sampleConfig() *config.Config {
 	return &config.Config{
 		Accounts: []config.AccountEntry{
 			{
-				SourceID:           "UA123",
-				GnuCashAccount:     "Assets:Monobank UAH",
-				DefaultCounterpart: "Imbalance-UAH",
+				SourceID:       "UA123",
+				GnuCashAccount: "Assets:Monobank UAH",
+				MCCRules:   map[string]string{"5411": "Imbalance-UAH"},
 			},
 		},
 	}
@@ -161,9 +161,9 @@ func TestRun_DryRunDoesNotWrite(t *testing.T) {
 		t.Errorf("expected 2 transactions in result, got %d", len(result.Transactions))
 	}
 	if result.Transactions[0].ID != "txn-001" {
-		t.Errorf("expected first transaction ID txn-001, got %s", result.Transactions[0].ID)
+		t.Errorf("expected first transaction ID txn-001 (oldest first), got %s", result.Transactions[0].ID)
 	}
 	if result.Transactions[1].ID != "txn-002" {
-		t.Errorf("expected second transaction ID txn-002, got %s", result.Transactions[1].ID)
+		t.Errorf("expected second transaction ID txn-002 (oldest first), got %s", result.Transactions[1].ID)
 	}
 }
