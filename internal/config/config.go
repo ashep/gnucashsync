@@ -33,14 +33,18 @@ type AccountEntry struct {
 }
 
 // ResolveCounterpart returns the counterpart GnuCash account for a transaction.
-// It checks description_rules first (first match wins), then falls back to mcc_rules.
-func (e *AccountEntry) ResolveCounterpart(description, category string) (string, bool) {
+// It checks description_rules first (first match wins), then per-account mcc_rules,
+// then falls back to globalMCCRules (may be nil).
+func (e *AccountEntry) ResolveCounterpart(description, category string, globalMCCRules map[string]string) (string, bool) {
 	for _, r := range e.DescriptionRules {
 		if r.re.MatchString(description) {
 			return r.Account, true
 		}
 	}
-	account, ok := e.MCCRules[category]
+	if account, ok := e.MCCRules[category]; ok {
+		return account, ok
+	}
+	account, ok := globalMCCRules[category]
 	return account, ok
 }
 
@@ -52,6 +56,7 @@ type Config struct {
 	Path          string                       `yaml:"-"`
 	Book          string                       `yaml:"book"`
 	Sources       Sources                      `yaml:"sources"`
+	MCCRules      map[string]string            `yaml:"mcc_rules,omitempty"`
 	Accounts      []AccountEntry               `yaml:"accounts"`
 	CurrencyCache map[string]currencyRateEntry `yaml:"currency_cache,omitempty"`
 }

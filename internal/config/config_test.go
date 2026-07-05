@@ -9,6 +9,18 @@ import (
 	"github.com/ashep/gnucashsync/internal/config"
 )
 
+func loadConfig(t *testing.T, yml string) *config.Config {
+	t.Helper()
+	f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+	f.WriteString(yml)
+	f.Close()
+	cfg, err := config.Load(f.Name())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	return cfg
+}
+
 func loadEntry(t *testing.T, yml, sourceID string) config.AccountEntry {
 	t.Helper()
 	f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
@@ -143,7 +155,7 @@ accounts:
       "5411": "Imbalance-UAH"
 `, "UA123")
 
-	got, ok := entry.ResolveCounterpart("SILPO supermarket", "5411")
+	got, ok := entry.ResolveCounterpart("SILPO supermarket", "5411", nil)
 	if !ok {
 		t.Fatal("expected match")
 	}
@@ -164,12 +176,58 @@ accounts:
       "5411": "Imbalance-UAH"
 `, "UA123")
 
-	got, ok := entry.ResolveCounterpart("UBER ride", "5411")
+	got, ok := entry.ResolveCounterpart("UBER ride", "5411", nil)
 	if !ok {
 		t.Fatal("expected match via MCC fallback")
 	}
 	if got != "Imbalance-UAH" {
 		t.Errorf("got %q, want Imbalance-UAH", got)
+	}
+}
+
+func TestResolveCounterpart_GlobalMCCFallback(t *testing.T) {
+	cfg := loadConfig(t, `
+mcc_rules:
+  "5411": "Expenses:Food:Global"
+accounts:
+  - source_id: "UA123"
+    gnucash_account: "Assets:Bank"
+`)
+	entry, ok := cfg.AccountMapping("UA123")
+	if !ok {
+		t.Fatal("no mapping for UA123")
+	}
+
+	got, ok := entry.ResolveCounterpart("some store", "5411", cfg.MCCRules)
+	if !ok {
+		t.Fatal("expected match via global MCC fallback")
+	}
+	if got != "Expenses:Food:Global" {
+		t.Errorf("got %q, want Expenses:Food:Global", got)
+	}
+}
+
+func TestResolveCounterpart_PerAccountMCCWinsOverGlobal(t *testing.T) {
+	cfg := loadConfig(t, `
+mcc_rules:
+  "5411": "Expenses:Food:Global"
+accounts:
+  - source_id: "UA123"
+    gnucash_account: "Assets:Bank"
+    mcc_rules:
+      "5411": "Expenses:Food:Local"
+`)
+	entry, ok := cfg.AccountMapping("UA123")
+	if !ok {
+		t.Fatal("no mapping for UA123")
+	}
+
+	got, ok := entry.ResolveCounterpart("some store", "5411", cfg.MCCRules)
+	if !ok {
+		t.Fatal("expected match")
+	}
+	if got != "Expenses:Food:Local" {
+		t.Errorf("got %q, want Expenses:Food:Local", got)
 	}
 }
 
@@ -185,7 +243,7 @@ accounts:
         account: "Expenses:Food"
 `, "UA123")
 
-	got, ok := entry.ResolveCounterpart("SILPO store", "")
+	got, ok := entry.ResolveCounterpart("SILPO store", "", nil)
 	if !ok {
 		t.Fatal("expected match")
 	}
@@ -206,7 +264,7 @@ accounts:
       "5411": "Imbalance-UAH"
 `, "UA123")
 
-	_, ok := entry.ResolveCounterpart("UNKNOWN store", "9999")
+	_, ok := entry.ResolveCounterpart("UNKNOWN store", "9999", nil)
 	if ok {
 		t.Fatal("expected no match")
 	}
@@ -222,7 +280,7 @@ accounts:
         account: SKIP
 `, "UA123")
 
-	got, ok := entry.ResolveCounterpart("Cashback reward", "")
+	got, ok := entry.ResolveCounterpart("Cashback reward", "", nil)
 	if !ok {
 		t.Fatal("expected match")
 	}
