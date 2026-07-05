@@ -6,7 +6,7 @@ Supported sources:
 
 - **Custom JSON** — define your own transaction files
 - **PrivatBank CSV** — exports from PrivatBank internet banking
-- **Monobank** — API integration (coming soon)
+- **Monobank** — API integration
 
 ## How it works
 
@@ -33,15 +33,19 @@ go build ./cmd/gnucashsync/
 ## Usage
 
 ```
-gnucashsync --file <book.gnucash> --config <accounts.yaml> [--source <file>] [--type <type>]
+gnucashsync --file <book.gnucash> --config <accounts.yaml> [--source <file>] [--type <type>] [options]
 ```
 
-| Flag       | Required         | Description                                                                                              |
-|------------|------------------|----------------------------------------------------------------------------------------------------------|
-| `--file`   | yes*             | Path to your `.gnucash` file. Can be set via the `book` key in the config instead.                       |
-| `--config` | no               | Path to your account mapping config (YAML). Defaults to `~/.gnucashsync.yaml`.                           |
-| `--source` | for file sources | Path to the input file (JSON or CSV)                                                                     |
-| `--type`   | no               | Source type: `json`, `privatbank`, `monobank`. Auto-detected from `.json`/`.csv` extension; defaults to `monobank`. |
+| Flag          | Required         | Description                                                                                              |
+|---------------|------------------|----------------------------------------------------------------------------------------------------------|
+| `--file`      | yes*             | Path to your `.gnucash` file. Can be set via the `book` key in the config instead.                       |
+| `--config`    | no               | Path to your account mapping config (YAML). Defaults to `~/.gnucashsync.yaml`.                           |
+| `--source`    | for file sources | Path to the input file (JSON or CSV)                                                                     |
+| `--type`      | no               | Source type: `json`, `privatbank`, `monobank`. Auto-detected from `.json`/`.csv` extension; defaults to `monobank`. |
+| `--account`   | no               | Only import from this `source_id` (default: all accounts).                                               |
+| `--since`     | no               | Only import transactions on or after this date (`YYYY-MM-DD`).                                           |
+| `--until`     | no               | Only import transactions on or before this date (`YYYY-MM-DD`).                                          |
+| `--dry-run`   | no               | Simulate import without writing to disk; prints what would be imported.                                  |
 
 **Examples:**
 
@@ -54,18 +58,35 @@ gnucashsync --file ~/finances/mybook.gnucash --config accounts.yaml --source exp
 
 # Import from Monobank API (token in config file)
 gnucashsync --file ~/finances/mybook.gnucash --config accounts.yaml --type monobank
+
+# Preview what would be imported without touching the file
+gnucashsync --type monobank --dry-run
+
+# Import only one account, within a specific date range
+gnucashsync --type monobank --account UA123456789 --since 2026-06-01 --until 2026-06-30
 ```
 
 **Output:**
 
+Each imported transaction is printed followed by a summary line:
+
 ```
-Imported: 12, Skipped (duplicates): 3, Skipped (unmapped): 1
+2026-07-01  Grocery store                             -450.00 UAH
+2026-07-02  Salary                                  50000.00 UAH
+Imported: 2, Skipped (duplicates): 3, Skipped (unmapped): 1
+```
+
+With `--dry-run`, no file is written and the summary uses different wording:
+
+```
+[dry-run] 2026-07-01  Grocery store                             -450.00 UAH
+[dry-run] Would import: 2, skip duplicates: 3, skip unmapped: 1
 ```
 
 ## Config file
 
-The config file maps source account identifiers to GnuCash account paths and sets the default counterpart account for
-each.
+The config file maps source account identifiers to GnuCash accounts and defines rules for determining the counterpart
+(second split) of each double-entry transaction.
 
 ```yaml
 # Path to your .gnucash file (can be overridden with --file on the command line)
@@ -76,25 +97,64 @@ sources:
   monobank:
     token: "your-monobank-api-token"
 
+# Global MCC category rules — applied to all accounts when no per-account rule matches.
+# Keys are MCC codes (as strings); values are GnuCash account paths.
+# Use the special value "SKIP" to silently drop matching transactions.
+mcc_rules:
+  "5411": "Expenses:Food:Groceries"
+  "5812": "Expenses:Food:Restaurants"
+  "4111": "Expenses:Transport"
+
 # Account mappings
 accounts:
-  - source_id: "UA123456789"          # card/account number from the source
-    gnucash_account: "Assets:Bank:Monobank UAH"   # colon-separated GnuCash path
-    default_counterpart: "Imbalance-UAH"          # second split of the double-entry
+  - source_id: "UA123456789"          # card/account IBAN from the source
+    gnucash_account: "Assets:Bank:Monobank UAH"
+
+    # Description-based rules (checked first, in order; first match wins).
+    # Patterns are regular expressions matched against the transaction description.
+    description_rules:
+      - pattern: "Salary"
+        account: "Income:Salary"
+      - pattern: ".*"              # catch-all fallback
+        account: "Imbalance-UAH"
 
   - source_id: "UA987654321"
     gnucash_account: "Assets:Bank:PrivatBank UAH"
-    default_counterpart: "Imbalance-UAH"
+
+    # Per-account MCC rules override global mcc_rules for this account.
+    mcc_rules:
+      "5411": "Expenses:Groceries:PrivatBank"
+
+    description_rules:
+      - pattern: ".*"
+        account: "Imbalance-UAH"
 ```
 
-**`source_id`** is the account identifier as it appears in your source data — the card number, account ID, or any string
-you choose. It must match the `account_id` field in JSON sources or the card column in PrivatBank CSV.
+**`source_id`** is the account identifier as it appears in your source data — the IBAN for Monobank, the card number for
+PrivatBank CSV, or any string you choose for JSON sources. It must match the `account_id` field in JSON sources.
 
 **`gnucash_account`** is the full path to the account in GnuCash, using colons as separators. This must exactly match
 the account hierarchy in your book (case-sensitive).
 
-**`default_counterpart`** is where the other half of each double-entry split goes. New transactions land in this account
-so you can re-categorize them manually in GnuCash — a standard workflow for bank imports.
+### Counterpart resolution
+
+For each transaction, gnucashsync determines the counterpart account (where the other half of the double-entry split
+goes) using this priority order:
+
+1. **`description_rules`** (per-account) — regex patterns matched against the transaction description; first match wins.
+2. **`mcc_rules`** (per-account) — keyed by MCC category code.
+3. **`mcc_rules`** (global) — fallback when no per-account rule matches.
+
+If no rule matches, gnucashsync reports an error and aborts (or, with `--dry-run`, logs a warning and counts the
+transaction as unmapped). A catch-all description rule (`pattern: ".*"`) prevents this:
+
+```yaml
+description_rules:
+  - pattern: ".*"
+    account: "Imbalance-UAH"
+```
+
+Setting any rule's account to `"SKIP"` silently drops matching transactions instead of importing them.
 
 ## Source formats
 
@@ -156,8 +216,8 @@ The token is read from `sources.monobank.token`. gnucashsync fetches the last 31
 accounts on the token. Use your account IBAN as `source_id` in the account mapping — the IBAN is shown in the
 Monobank app under card details.
 
-**Rate limiting:** the Monobank API allows one statement request per 60 seconds. If you have multiple accounts,
-gnucashsync waits automatically between requests and logs progress.
+**Rate limiting:** if the Monobank API returns a rate-limit response, gnucashsync waits the duration indicated by the
+server and retries automatically.
 
 ## Duplicate detection
 
