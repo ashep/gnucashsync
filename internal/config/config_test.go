@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -175,6 +176,112 @@ accounts:
 	}
 	if !rate.Equal(decimal.NewFromFloat(41.5)) {
 		t.Errorf("expected 41.5 after reload, got %s", rate)
+	}
+}
+
+func TestConfig_SaveCurrencyCache_PreservesFormatting(t *testing.T) {
+	const input = `book: /tmp/test.gnucash
+
+sources:
+  monobank:
+    token: "secret"
+
+accounts:
+  - source_id: "UA111"
+    gnucash_account: "Assets:One"
+
+mcc_rules:
+  "5411": "Expenses:Food"
+
+`
+	f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+	if _, err := f.WriteString(input); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	cfg, err := config.Load(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.SetRate("USD", "UAH", decimal.NewFromFloat(41.5))
+	if err := cfg.SaveCurrencyCache(); err != nil {
+		t.Fatalf("SaveCurrencyCache: %v", err)
+	}
+
+	got, err := os.ReadFile(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotStr := string(got)
+
+	if gotStr == input {
+		t.Fatal("expected currency_cache section to be added")
+	}
+	if !strings.Contains(gotStr, "book: /tmp/test.gnucash\n\nsources:") {
+		t.Errorf("blank line after book was removed:\n%s", gotStr)
+	}
+	if !strings.Contains(gotStr, "token: \"secret\"\n\naccounts:") {
+		t.Errorf("blank line before accounts was removed:\n%s", gotStr)
+	}
+	if !strings.Contains(gotStr, "Assets:One\"\n\nmcc_rules:") {
+		t.Errorf("blank line before mcc_rules was removed:\n%s", gotStr)
+	}
+	if !strings.Contains(gotStr, "currency_cache:") {
+		t.Errorf("expected currency_cache section in output:\n%s", gotStr)
+	}
+	if !strings.Contains(gotStr, "USD/UAH") {
+		t.Errorf("expected USD/UAH rate in output:\n%s", gotStr)
+	}
+
+	cfg2, err := config.Load(f.Name())
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	rate, ok := cfg2.GetRate("USD", "UAH")
+	if !ok || !rate.Equal(decimal.NewFromFloat(41.5)) {
+		t.Fatalf("expected persisted rate 41.5, got %s (ok=%v)", rate, ok)
+	}
+}
+
+func TestConfig_SaveCurrencyCache_PreservesCurrencyCacheComment(t *testing.T) {
+	const input = `book: /tmp/test.gnucash
+
+currency_cache: # auto-populated exchange rates
+
+accounts:
+  - source_id: "UA111"
+    gnucash_account: "Assets:One"
+`
+	f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+	if _, err := f.WriteString(input); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	cfg, err := config.Load(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.SetRate("USD", "UAH", decimal.NewFromFloat(41.5))
+	if err := cfg.SaveCurrencyCache(); err != nil {
+		t.Fatalf("SaveCurrencyCache: %v", err)
+	}
+
+	got, err := os.ReadFile(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotStr := string(got)
+
+	if !strings.Contains(gotStr, "currency_cache: # auto-populated exchange rates") {
+		t.Errorf("currency_cache comment was not preserved:\n%s", gotStr)
+	}
+	if !strings.Contains(gotStr, "USD/UAH") {
+		t.Errorf("expected new USD/UAH rate in output:\n%s", gotStr)
+	}
+	if !strings.Contains(gotStr, "Assets:One\"\n") {
+		t.Errorf("accounts section formatting changed:\n%s", gotStr)
 	}
 }
 

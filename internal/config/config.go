@@ -145,19 +145,13 @@ func (c *Config) Save() error {
 	return os.WriteFile(c.Path, data, 0600)
 }
 
-// SaveCurrencyCache persists only currency_cache (and reads the latest config
-// from disk first) so in-memory subsets — e.g. after --account filtering —
-// cannot overwrite unrelated sections like accounts.
+// SaveCurrencyCache persists only currency_cache by patching that section in the
+// config file, leaving user formatting elsewhere intact.
 func (c *Config) SaveCurrencyCache() error {
 	if c.Path == "" {
 		return nil
 	}
-	onDisk, err := Load(c.Path)
-	if err != nil {
-		return fmt.Errorf("reading config for currency cache update: %w", err)
-	}
-	onDisk.CurrencyCache = c.CurrencyCache
-	return onDisk.Save()
+	return patchCurrencyCacheInFile(c.Path, c.CurrencyCache)
 }
 
 func Load(path string) (*Config, error) {
