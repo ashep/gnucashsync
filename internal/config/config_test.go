@@ -325,6 +325,62 @@ accounts:
 	}
 }
 
+func TestLoad_DuplicateAlias(t *testing.T) {
+	yml := `
+accounts:
+  - source_id: "UA111"
+    alias: "mono_black"
+    gnucash_account: "Assets:One"
+  - source_id: "UA222"
+    alias: "mono_black"
+    gnucash_account: "Assets:Two"
+`
+	f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+	f.WriteString(yml)
+	f.Close()
+	_, err := config.Load(f.Name())
+	if err == nil {
+		t.Fatal("expected error for duplicate alias")
+	}
+	if !strings.Contains(err.Error(), "duplicate alias") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveAccountRef(t *testing.T) {
+	yml := `
+accounts:
+  - source_id: "UA111"
+    alias: "mono_black"
+    gnucash_account: "Assets:One"
+  - source_id: "UA222"
+    alias: "privat_savings"
+    gnucash_account: "Assets:Two"
+`
+	cfg := loadConfig(t, yml)
+
+	got, err := cfg.ResolveAccountRef("mono_black")
+	if err != nil {
+		t.Fatalf("ResolveAccountRef(alias): %v", err)
+	}
+	if got != "UA111" {
+		t.Errorf("got %q, want UA111", got)
+	}
+
+	got, err = cfg.ResolveAccountRef("UA222")
+	if err != nil {
+		t.Fatalf("ResolveAccountRef(source_id): %v", err)
+	}
+	if got != "UA222" {
+		t.Errorf("got %q, want UA222", got)
+	}
+
+	_, err = cfg.ResolveAccountRef("unknown")
+	if err == nil {
+		t.Fatal("expected error for unknown ref")
+	}
+}
+
 func TestLoad_InvalidDescriptionPattern(t *testing.T) {
 	yml := `
 accounts:

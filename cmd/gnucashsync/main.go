@@ -19,7 +19,7 @@ func main() {
 	cfg := flag.String("config", "", "path to accounts YAML config (default: ~/.gnucashsync.yaml)")
 	src := flag.String("source", "", "source provider: privatbank, monobank")
 	input := flag.String("input", "", "path to source file (for file-based providers)")
-	account := flag.String("account", "", "only import from this source_id (default: all accounts)")
+	account := flag.String("account", "", "only import from this source_id or alias (default: all accounts)")
 	dryRun := flag.Bool("dry-run", false, "simulate import without writing to disk")
 	sinceStr := flag.String("since", "", "only import transactions on or after this date (YYYY-MM-DD)")
 	untilStr := flag.String("until", "", "only import transactions on or before this date (YYYY-MM-DD)")
@@ -61,17 +61,13 @@ func main() {
 		log.Fatalf("loading config: %v", err)
 	}
 
+	accountFilter := ""
 	if *account != "" {
-		found := false
-		for _, a := range conf.Accounts {
-			if a.SourceID == *account {
-				found = true
-				break
-			}
+		sourceID, err := conf.ResolveAccountRef(*account)
+		if err != nil {
+			log.Fatalf("%v", err)
 		}
-		if !found {
-			log.Fatalf("no account with source_id %q found in config", *account)
-		}
+		accountFilter = sourceID
 	}
 
 	if *file == "" {
@@ -122,7 +118,7 @@ func main() {
 	case "monobank":
 		var monobankIDs []string
 		for _, a := range conf.Accounts {
-			if *account == "" || a.SourceID == *account {
+			if accountFilter == "" || a.SourceID == accountFilter {
 				monobankIDs = append(monobankIDs, a.SourceID)
 			}
 		}
@@ -135,7 +131,7 @@ func main() {
 		DryRun:        *dryRun,
 		Since:         since,
 		Until:         until,
-		AccountFilter: *account,
+		AccountFilter: accountFilter,
 	})
 	if err != nil {
 		log.Fatalf("import failed: %v", err)

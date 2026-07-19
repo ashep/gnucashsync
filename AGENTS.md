@@ -73,7 +73,7 @@ gnucashsync --file <book.gnucash> [--config <accounts.yaml>] [--source <provider
 | `--config` | YAML config path (default: `~/.gnucashsync.yaml`) |
 | `--source` | Provider: `privatbank` or `monobank` (default: `monobank`, or `privatbank` if `sources.privatbank.dir` is set) |
 | `--input` | File or directory for file-based providers |
-| `--account` | Import only this `source_id` |
+| `--account` | Import only this `source_id` or alias |
 | `--since` / `--until` | Date filter `YYYY-MM-DD` (inclusive) |
 | `--dry-run` | Simulate; no writes |
 
@@ -97,6 +97,7 @@ mcc_rules:                       # global MCC → GnuCash account
 
 accounts:
   - source_id: "UA123456789"      # IBAN (Monobank) or card (PrivatBank)
+    alias: "mono_black"           # optional; usable with --account
     gnucash_account: "Assets:Bank:Monobank UAH"
     description_rules:
       - pattern: ".*"

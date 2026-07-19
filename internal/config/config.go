@@ -39,6 +39,7 @@ type DescriptionRule struct {
 
 type AccountEntry struct {
 	SourceID         string            `yaml:"source_id"`
+	Alias            string            `yaml:"alias,omitempty"`
 	GnuCashAccount   string            `yaml:"gnucash_account"`
 	DescriptionRules []DescriptionRule `yaml:"description_rules"`
 	MCCRules         map[string]string `yaml:"mcc_rules"`
@@ -169,9 +170,17 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	cfg.currencyCacheTTL = ttl
+	aliases := make(map[string]string)
 	for i := range cfg.Accounts {
-		for j := range cfg.Accounts[i].DescriptionRules {
-			r := &cfg.Accounts[i].DescriptionRules[j]
+		e := &cfg.Accounts[i]
+		if e.Alias != "" {
+			if other, ok := aliases[e.Alias]; ok {
+				return nil, fmt.Errorf("accounts: duplicate alias %q (%s and %s)", e.Alias, other, e.SourceID)
+			}
+			aliases[e.Alias] = e.SourceID
+		}
+		for j := range e.DescriptionRules {
+			r := &e.DescriptionRules[j]
 			re, err := regexp.Compile(r.Pattern)
 			if err != nil {
 				return nil, fmt.Errorf("description_rules: invalid pattern %q: %w", r.Pattern, err)
@@ -210,4 +219,19 @@ func (c *Config) AccountMapping(sourceID string) (AccountEntry, bool) {
 		}
 	}
 	return AccountEntry{}, false
+}
+
+// ResolveAccountRef returns the source_id for ref, which may be a source_id or alias.
+func (c *Config) ResolveAccountRef(ref string) (string, error) {
+	for _, e := range c.Accounts {
+		if e.SourceID == ref {
+			return e.SourceID, nil
+		}
+	}
+	for _, e := range c.Accounts {
+		if e.Alias != "" && e.Alias == ref {
+			return e.SourceID, nil
+		}
+	}
+	return "", fmt.Errorf("no account with source_id or alias %q", ref)
 }
