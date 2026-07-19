@@ -169,3 +169,11 @@ GnuCash account paths are colon-separated, case-sensitive, and must exist in the
 ## Git / commits
 
 Do not create commits unless explicitly asked. When committing, do not include secrets, real financial data, or user-specific config.
+
+**Co-authored-by trailers:** never add `Co-authored-by` lines for AI assistants or coding agents (including Cursor). Repo hook `.githooks/commit-msg` rejects them. Enable locally once:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+When committing from Cursor, prefer `git commit-tree` (or amend with a filtered message) if the environment injects a trailer; verify with `git log -1 --format=full` before pushing.

@@ -1,0 +1,5 @@
+#!/bin/sh
+if grep -qi 'Co-authored-by' "$1"; then
+	echo "error: Co-authored-by trailers are not allowed" >&2
+	exit 1
+fi
