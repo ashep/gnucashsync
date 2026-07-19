@@ -84,7 +84,10 @@ func Run(src source.Source, gnucashPath string, cfg *config.Config, opts Options
 
 		t.Description = strings.ReplaceAll(t.Description, "\n", "; ")
 
-		counterpart, ok := entry.ResolveCounterpart(t.Description, t.Category, cfg.MCCRules)
+		counterpart, newDesc, ok := entry.ResolveCounterpart(t.Description, t.Category, t.Amount, cfg.MCCRules)
+		if newDesc != "" {
+			t.Description = newDesc
+		}
 		if ok && counterpart == config.SkipAccount {
 			log.Printf("skipping transaction %q: matched SKIP rule (%s)", t.ID, t.Description)
 			result.SkippedRule++

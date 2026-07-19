@@ -155,7 +155,7 @@ accounts:
       "5411": "Imbalance-UAH"
 `, "UA123")
 
-	got, ok := entry.ResolveCounterpart("SILPO supermarket", "5411", nil)
+	got, _, ok := entry.ResolveCounterpart("SILPO supermarket", "5411", decimal.Zero, nil)
 	if !ok {
 		t.Fatal("expected match")
 	}
@@ -176,7 +176,7 @@ accounts:
       "5411": "Imbalance-UAH"
 `, "UA123")
 
-	got, ok := entry.ResolveCounterpart("UBER ride", "5411", nil)
+	got, _, ok := entry.ResolveCounterpart("UBER ride", "5411", decimal.Zero, nil)
 	if !ok {
 		t.Fatal("expected match via MCC fallback")
 	}
@@ -198,7 +198,7 @@ accounts:
 		t.Fatal("no mapping for UA123")
 	}
 
-	got, ok := entry.ResolveCounterpart("some store", "5411", cfg.MCCRules)
+	got, _, ok := entry.ResolveCounterpart("some store", "5411", decimal.Zero, cfg.MCCRules)
 	if !ok {
 		t.Fatal("expected match via global MCC fallback")
 	}
@@ -222,7 +222,7 @@ accounts:
 		t.Fatal("no mapping for UA123")
 	}
 
-	got, ok := entry.ResolveCounterpart("some store", "5411", cfg.MCCRules)
+	got, _, ok := entry.ResolveCounterpart("some store", "5411", decimal.Zero, cfg.MCCRules)
 	if !ok {
 		t.Fatal("expected match")
 	}
@@ -243,7 +243,7 @@ accounts:
         account: "Expenses:Food"
 `, "UA123")
 
-	got, ok := entry.ResolveCounterpart("SILPO store", "", nil)
+	got, _, ok := entry.ResolveCounterpart("SILPO store", "", decimal.Zero, nil)
 	if !ok {
 		t.Fatal("expected match")
 	}
@@ -264,9 +264,82 @@ accounts:
       "5411": "Imbalance-UAH"
 `, "UA123")
 
-	_, ok := entry.ResolveCounterpart("UNKNOWN store", "9999", nil)
+	_, _, ok := entry.ResolveCounterpart("UNKNOWN store", "9999", decimal.Zero, nil)
 	if ok {
 		t.Fatal("expected no match")
+	}
+}
+
+func TestResolveCounterpart_DescriptionRuleWithAmount(t *testing.T) {
+	entry := loadEntry(t, `
+accounts:
+  - source_id: "UA123"
+    gnucash_account: "Assets:Bank"
+    description_rules:
+      - pattern: "Subscription"
+        amount: "-99.00"
+        account: "Expenses:Subscriptions"
+      - pattern: "Subscription"
+        account: "Expenses:Other"
+`, "UA123")
+
+	got, _, ok := entry.ResolveCounterpart("Monthly Subscription", "", decimal.RequireFromString("-99.00"), nil)
+	if !ok {
+		t.Fatal("expected match")
+	}
+	if got != "Expenses:Subscriptions" {
+		t.Errorf("got %q, want Expenses:Subscriptions", got)
+	}
+
+	got, _, ok = entry.ResolveCounterpart("Monthly Subscription", "", decimal.RequireFromString("-50.00"), nil)
+	if !ok {
+		t.Fatal("expected fallback match when amount differs")
+	}
+	if got != "Expenses:Other" {
+		t.Errorf("got %q, want Expenses:Other", got)
+	}
+}
+
+func TestLoad_InvalidDescriptionAmount(t *testing.T) {
+	yml := `
+accounts:
+  - source_id: "UA123"
+    gnucash_account: "Assets:Bank"
+    description_rules:
+      - pattern: "foo"
+        amount: "not-a-number"
+        account: "Expenses:Food"
+`
+	f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+	f.WriteString(yml)
+	f.Close()
+
+	_, err := config.Load(f.Name())
+	if err == nil {
+		t.Fatal("expected error for invalid amount")
+	}
+}
+
+func TestResolveCounterpart_DescriptionRuleNewDescription(t *testing.T) {
+	entry := loadEntry(t, `
+accounts:
+  - source_id: "UA123"
+    gnucash_account: "Assets:Bank"
+    description_rules:
+      - pattern: "PAYPAL"
+        new_description: "PayPal payment"
+        account: "Expenses:Online"
+`, "UA123")
+
+	got, newDesc, ok := entry.ResolveCounterpart("PAYPAL *SHOP 123", "", decimal.Zero, nil)
+	if !ok {
+		t.Fatal("expected match")
+	}
+	if got != "Expenses:Online" {
+		t.Errorf("got account %q, want Expenses:Online", got)
+	}
+	if newDesc != "PayPal payment" {
+		t.Errorf("got new_description %q, want PayPal payment", newDesc)
 	}
 }
 
@@ -280,7 +353,7 @@ accounts:
         account: SKIP
 `, "UA123")
 
-	got, ok := entry.ResolveCounterpart("Cashback reward", "", nil)
+	got, _, ok := entry.ResolveCounterpart("Cashback reward", "", decimal.Zero, nil)
 	if !ok {
 		t.Fatal("expected match")
 	}

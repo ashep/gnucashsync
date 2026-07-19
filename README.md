@@ -4,8 +4,7 @@ Import financial transactions from external sources into a GnuCash `.gnucash` fi
 
 Supported sources:
 
-- **Custom JSON** — define your own transaction files
-- **PrivatBank CSV** — exports from PrivatBank internet banking
+- **PrivatBank** — XLSX exports from PrivatBank internet banking (single file or directory)
 - **Monobank** — API integration
 
 ## How it works
@@ -33,37 +32,41 @@ go build ./cmd/gnucashsync/
 ## Usage
 
 ```
-gnucashsync --file <book.gnucash> --config <accounts.yaml> [--source <file>] [--type <type>] [options]
+gnucashsync --file <book.gnucash> [--config <accounts.yaml>] [--source <provider>] [--input <path>] [options]
 ```
 
 | Flag          | Required         | Description                                                                                              |
 |---------------|------------------|----------------------------------------------------------------------------------------------------------|
 | `--file`      | yes*             | Path to your `.gnucash` file. Can be set via the `book` key in the config instead.                       |
 | `--config`    | no               | Path to your account mapping config (YAML). Defaults to `~/.gnucashsync.yaml`.                           |
-| `--source`    | for file sources | Path to the input file (JSON or CSV)                                                                     |
-| `--type`      | no               | Source type: `json`, `privatbank`, `monobank`. Auto-detected from `.json`/`.csv` extension; defaults to `monobank`. |
+| `--source`    | no               | Source provider: `privatbank` or `monobank`. Defaults to `monobank`, or `privatbank` if `sources.privatbank.dir` is set in config. |
+| `--input`     | for file sources | Path to a PrivatBank XLSX export or a directory containing `.xlsx` files. Can be set via `sources.privatbank.dir` in config. |
 | `--account`   | no               | Only import from this `source_id` (default: all accounts).                                               |
 | `--since`     | no               | Only import transactions on or after this date (`YYYY-MM-DD`).                                           |
 | `--until`     | no               | Only import transactions on or before this date (`YYYY-MM-DD`).                                          |
 | `--dry-run`   | no               | Simulate import without writing to disk; prints what would be imported.                                  |
 
+\* `--file` is required unless `book` is set in the config file.
+
+When `--source` is not set and `--input` points to a `.xlsx` file, the provider is auto-detected as `privatbank`.
+
 **Examples:**
 
 ```bash
-# Import from a custom JSON file
-gnucashsync --file ~/finances/mybook.gnucash --config accounts.yaml --source transactions.json
+# Import a PrivatBank XLSX export (provider auto-detected from .xlsx extension)
+gnucashsync --file ~/finances/mybook.gnucash --config accounts.yaml --input statement.xlsx
 
-# Import a PrivatBank CSV export (type auto-detected from .csv extension)
-gnucashsync --file ~/finances/mybook.gnucash --config accounts.yaml --source export.csv
+# Import all PrivatBank exports from a directory (configured in YAML)
+gnucashsync --file ~/finances/mybook.gnucash --config accounts.yaml --source privatbank
 
 # Import from Monobank API (token in config file)
-gnucashsync --file ~/finances/mybook.gnucash --config accounts.yaml --type monobank
+gnucashsync --file ~/finances/mybook.gnucash --config accounts.yaml --source monobank
 
 # Preview what would be imported without touching the file
-gnucashsync --type monobank --dry-run
+gnucashsync --source monobank --dry-run
 
 # Import only one account, within a specific date range
-gnucashsync --type monobank --account UA123456789 --since 2026-06-01 --until 2026-06-30
+gnucashsync --source monobank --account UA123456789 --since 2026-06-01 --until 2026-06-30
 ```
 
 **Output:**
@@ -96,6 +99,8 @@ book: "~/finances/mybook.gnucash"
 sources:
   monobank:
     token: "your-monobank-api-token"
+  privatbank:
+    dir: "./import/privatbank"   # optional default input directory
 
 # Global MCC category rules — applied to all accounts when no per-account rule matches.
 # Keys are MCC codes (as strings); values are GnuCash account paths.
@@ -107,7 +112,7 @@ mcc_rules:
 
 # Account mappings
 accounts:
-  - source_id: "UA123456789"          # card/account IBAN from the source
+  - source_id: "UA123456789"          # IBAN (Monobank) or card number (PrivatBank)
     gnucash_account: "Assets:Bank:Monobank UAH"
 
     # Description-based rules (checked first, in order; first match wins).
@@ -115,7 +120,11 @@ accounts:
     description_rules:
       - pattern: "Salary"
         account: "Income:Salary"
-      - pattern: ".*"              # catch-all fallback
+      - pattern: "Netflix"
+        amount: "-15.99"               # optional; rule matches only when amount also matches
+        new_description: "Netflix"     # optional; replaces description when rule matches
+        account: "Expenses:Subscriptions"
+      - pattern: ".*"                  # catch-all fallback
         account: "Imbalance-UAH"
 
   - source_id: "UA987654321"
@@ -128,10 +137,16 @@ accounts:
     description_rules:
       - pattern: ".*"
         account: "Imbalance-UAH"
+
+# Auto-populated exchange rates for cross-currency transactions (Monobank API).
+# gnucashsync updates this section automatically when rates are fetched.
+currency_cache:
+  USD/UAH:
+    rate: "41.5"
 ```
 
-**`source_id`** is the account identifier as it appears in your source data — the IBAN for Monobank, the card number for
-PrivatBank CSV, or any string you choose for JSON sources. It must match the `account_id` field in JSON sources.
+**`source_id`** is the account identifier as it appears in your source data — the IBAN for Monobank, or the card number
+for PrivatBank exports.
 
 **`gnucash_account`** is the full path to the account in GnuCash, using colons as separators. This must exactly match
 the account hierarchy in your book (case-sensitive).
@@ -141,7 +156,9 @@ the account hierarchy in your book (case-sensitive).
 For each transaction, gnucashsync determines the counterpart account (where the other half of the double-entry split
 goes) using this priority order:
 
-1. **`description_rules`** (per-account) — regex patterns matched against the transaction description; first match wins.
+1. **`description_rules`** (per-account) — regex patterns matched against the transaction description; optional `amount`
+   requires an exact match in addition to the pattern; optional `new_description` rewrites the transaction description;
+   first match wins.
 2. **`mcc_rules`** (per-account) — keyed by MCC category code.
 3. **`mcc_rules`** (global) — fallback when no per-account rule matches.
 
@@ -158,66 +175,51 @@ Setting any rule's account to `"SKIP"` silently drops matching transactions inst
 
 ## Source formats
 
-### Custom JSON
+### PrivatBank
 
-A JSON array of transaction objects:
+PrivatBank exports can be imported as a single file or from a directory of exports.
 
-```json
-[
-  {
-    "id": "txn-001",
-    "date": "2026-07-01",
-    "description": "Grocery store",
-    "amount": -450.00,
-    "currency": "UAH",
-    "account_id": "UA123456789"
-  },
-  {
-    "id": "txn-002",
-    "date": "2026-07-02",
-    "description": "Salary",
-    "amount": 50000.00,
-    "currency": "UAH",
-    "account_id": "UA123456789"
-  }
-]
-```
-
-| Field         | Description                                                                                                                   |
-|---------------|-------------------------------------------------------------------------------------------------------------------------------|
-| `id`          | Unique identifier for the transaction. Used for duplicate detection — must be stable across runs.                             |
-| `date`        | Transaction date in `YYYY-MM-DD` format.                                                                                      |
-| `description` | Free-form description shown in GnuCash.                                                                                       |
-| `amount`      | Decimal amount. **Negative** = money leaving the account (expense, payment). **Positive** = money arriving (income, deposit). |
-| `currency`    | ISO 4217 currency code, e.g. `UAH`, `USD`, `EUR`.                                                                             |
-| `account_id`  | Must match a `source_id` in your config file.                                                                                 |
-
-### PrivatBank CSV
-
-Export your statement from PrivatBank internet banking and pass the CSV file directly:
+| Format | Input | Notes |
+|--------|-------|-------|
+| XLSX | `--input statement.xlsx` | Category column used for counterpart rules |
+| Directory | `--input ./exports/` or `sources.privatbank.dir` | Aggregates all `.xlsx` files; skips `~$` temp files |
 
 ```bash
-gnucashsync --file mybook.gnucash --config accounts.yaml --source statement.csv
+# Single XLSX file
+gnucashsync --file mybook.gnucash --config accounts.yaml --input statement.xlsx
+
+# Directory of exports (uses sources.privatbank.dir from config if --input is omitted)
+gnucashsync --file mybook.gnucash --config accounts.yaml --source privatbank
 ```
 
-The card number from the CSV is used as `account_id` and must have a matching `source_id` entry in your config. Since
-PrivatBank exports have no native transaction ID, gnucashsync generates a stable ID from the date, time, card, amount,
-and description — so the same export can be imported multiple times safely.
+The card number from the export is used as `source_id` and must have a matching entry in your config. Since PrivatBank
+exports have no native transaction ID, gnucashsync generates a stable ID from the date, time, card, amount, and
+description — so the same export can be imported multiple times safely.
+
+**Category rules:** the XLSX category column contains text labels (e.g. `Переказ на свою картку`), not numeric MCC
+codes. Map these strings as keys in `mcc_rules` or per-account `mcc_rules` to route transactions to the right
+counterpart account.
+
+**Cross-currency transactions:** when the operation currency in the XLSX differs from the account currency, gnucashsync
+uses the operation amount and currency columns from the export directly — no exchange-rate lookup is needed.
 
 ### Monobank
 
-Set your API token in the config file and run without `--source`:
+Set your API token in the config file and run without `--input`:
 
 ```bash
-gnucashsync --type monobank
+gnucashsync --source monobank
 ```
 
-The token is read from `sources.monobank.token`. gnucashsync fetches the last 31 days of transactions from all
-accounts on the token. Use your account IBAN as `source_id` in the account mapping — the IBAN is shown in the
-Monobank app under card details.
+The token is read from `sources.monobank.token`. gnucashsync fetches transactions for accounts listed in your config
+(`source_id` must be the account IBAN shown in the Monobank app under card details). By default it fetches the last 31
+days; use `--since` and `--until` to narrow the range.
 
 **Rate limiting:** if the Monobank API returns a rate-limit response, gnucashsync waits the duration indicated by the
 server and retries automatically.
+
+**Cross-currency transactions:** when a transaction's counterpart account is in a different currency, gnucashsync
+fetches exchange rates from the Monobank public API and caches them in `currency_cache` for future runs.
 
 ## Duplicate detection
 
@@ -265,7 +267,7 @@ Paths are case-sensitive and must match the account names in GnuCash character-f
 
 ## Unmapped transactions
 
-If a transaction's `account_id` has no matching `source_id` in the config, gnucashsync logs a warning and skips the
+If a transaction's account identifier has no matching `source_id` in the config, gnucashsync logs a warning and skips the
 transaction. The final summary counts how many were skipped this way so you know to update your config.
 
 ## Building

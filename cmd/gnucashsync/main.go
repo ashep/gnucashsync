@@ -17,8 +17,8 @@ import (
 func main() {
 	file := flag.String("file", "", "path to .gnucash file (overrides config)")
 	cfg := flag.String("config", "", "path to accounts YAML config (default: ~/.gnucashsync.yaml)")
-	src := flag.String("source", "", "path to source file (for file-based types)")
-	typ := flag.String("type", "", "source type: json, privatbank, monobank")
+	src := flag.String("source", "", "source provider: privatbank, monobank")
+	input := flag.String("input", "", "path to source file (for file-based providers)")
 	account := flag.String("account", "", "only import from this source_id (default: all accounts)")
 	dryRun := flag.Bool("dry-run", false, "simulate import without writing to disk")
 	sinceStr := flag.String("since", "", "only import transactions on or after this date (YYYY-MM-DD)")
@@ -42,6 +42,10 @@ func main() {
 			log.Fatalf("invalid --until date %q: expected YYYY-MM-DD", *untilStr)
 		}
 		until = until.Add(24*time.Hour - time.Nanosecond) // include the full day
+	}
+
+	if !since.IsZero() && !until.IsZero() && since.After(until) {
+		log.Fatal("value of -since must not be greater than -until")
 	}
 
 	if *cfg == "" {
@@ -79,32 +83,42 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Auto-detect type from file extension if not specified.
-	if *typ == "" && *src != "" {
-		switch strings.ToLower(filepath.Ext(*src)) {
-		case ".json":
-			*typ = "json"
-		case ".csv":
-			*typ = "privatbank"
+	// Auto-detect source provider from input file extension if not specified.
+	if *src == "" && *input != "" {
+		switch strings.ToLower(filepath.Ext(*input)) {
+		case ".xlsx":
+			*src = "privatbank"
 		}
 	}
 
-	if *typ == "" {
-		*typ = "monobank"
+	if *src == "" && conf.Sources.Privatbank.Dir != "" {
+		*src = "privatbank"
+	}
+
+	if *src == "" {
+		*src = "monobank"
 	}
 
 	var s source.Source
-	switch *typ {
-	case "json":
-		if *src == "" {
-			log.Fatal("--source is required for type json")
-		}
-		s = source.NewJSON(*src)
+	switch *src {
 	case "privatbank":
-		if *src == "" {
-			log.Fatal("--source is required for type privatbank")
+		if *input == "" {
+			*input = conf.Sources.Privatbank.Dir
 		}
-		s = source.NewPrivatBank(*src)
+		if *input == "" {
+			log.Fatal("--input is required for privatbank source (or set sources.privatbank.dir in config)")
+		}
+		info, err := os.Stat(*input)
+		if err != nil {
+			log.Fatalf("privatbank input %q: %v", *input, err)
+		}
+		if info.IsDir() {
+			s = source.NewPrivatBankDir(*input)
+		} else if strings.ToLower(filepath.Ext(*input)) == ".xlsx" {
+			s = source.NewPrivatBankXLSX(*input)
+		} else {
+			log.Fatalf("privatbank input %q: expected .xlsx file or directory", *input)
+		}
 	case "monobank":
 		var monobankIDs []string
 		for _, a := range conf.Accounts {
@@ -112,7 +126,7 @@ func main() {
 		}
 		s = source.NewMonobank(conf.Sources.Monobank.Token, monobankIDs, since, until)
 	default:
-		log.Fatalf("unknown source type %q; valid: json, privatbank, monobank", *typ)
+		log.Fatalf("unknown source %q; valid: privatbank, monobank", *src)
 	}
 
 	result, err := importer.Run(s, *file, conf, importer.Options{DryRun: *dryRun, Since: since, Until: until})

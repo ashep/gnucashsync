@@ -1,5 +1,6 @@
-/vendor
 /docs
+/vendor
+/import
 .claude/
 .idea/
 .superpowers/

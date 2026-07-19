@@ -15,14 +15,22 @@ type MonobankSource struct {
 	Token string `yaml:"token"`
 }
 
+type PrivatbankSource struct {
+	Dir string `yaml:"dir"`
+}
+
 type Sources struct {
-	Monobank MonobankSource `yaml:"monobank"`
+	Monobank   MonobankSource   `yaml:"monobank"`
+	Privatbank PrivatbankSource `yaml:"privatbank"`
 }
 
 type DescriptionRule struct {
-	Pattern string `yaml:"pattern"`
-	Account string `yaml:"account"`
-	re      *regexp.Regexp
+	Pattern        string `yaml:"pattern"`
+	Amount         string `yaml:"amount,omitempty"`
+	NewDescription string `yaml:"new_description,omitempty"`
+	Account        string `yaml:"account"`
+	re             *regexp.Regexp
+	amount         *decimal.Decimal
 }
 
 type AccountEntry struct {
@@ -35,17 +43,23 @@ type AccountEntry struct {
 // ResolveCounterpart returns the counterpart GnuCash account for a transaction.
 // It checks description_rules first (first match wins), then per-account mcc_rules,
 // then falls back to globalMCCRules (may be nil).
-func (e *AccountEntry) ResolveCounterpart(description, category string, globalMCCRules map[string]string) (string, bool) {
+// Description rules may optionally require an exact amount match in addition to the pattern.
+// When a description rule sets new_description, it is returned as the second value.
+func (e *AccountEntry) ResolveCounterpart(description, category string, amount decimal.Decimal, globalMCCRules map[string]string) (account string, newDescription string, ok bool) {
 	for _, r := range e.DescriptionRules {
-		if r.re.MatchString(description) {
-			return r.Account, true
+		if !r.re.MatchString(description) {
+			continue
 		}
+		if r.amount != nil && !amount.Equal(*r.amount) {
+			continue
+		}
+		return r.Account, r.NewDescription, true
 	}
 	if account, ok := e.MCCRules[category]; ok {
-		return account, ok
+		return account, "", ok
 	}
-	account, ok := globalMCCRules[category]
-	return account, ok
+	account, ok = globalMCCRules[category]
+	return account, "", ok
 }
 
 type currencyRateEntry struct {
@@ -120,6 +134,13 @@ func Load(path string) (*Config, error) {
 				return nil, fmt.Errorf("description_rules: invalid pattern %q: %w", r.Pattern, err)
 			}
 			r.re = re
+			if r.Amount != "" {
+				amt, err := decimal.NewFromString(r.Amount)
+				if err != nil {
+					return nil, fmt.Errorf("description_rules: invalid amount %q: %w", r.Amount, err)
+				}
+				r.amount = &amt
+			}
 		}
 	}
 	return &cfg, nil

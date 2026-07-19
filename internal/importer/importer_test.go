@@ -12,6 +12,7 @@ import (
 
 	"github.com/ashep/gnucashsync/internal/config"
 	"github.com/ashep/gnucashsync/internal/importer"
+	"github.com/ashep/gnucashsync/internal/model"
 	"github.com/ashep/gnucashsync/internal/source"
 )
 
@@ -94,189 +95,41 @@ func sampleConfig() *config.Config {
 	}
 }
 
-func TestRun_ImportsNewTransactions(t *testing.T) {
-	path := writeSampleBook(t)
-	src := source.NewJSON("../../testdata/transactions.json")
-	cfg := sampleConfig()
-
-	result, err := importer.Run(src, path, cfg, importer.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Imported != 2 {
-		t.Errorf("expected Imported=2, got %d", result.Imported)
-	}
-	if result.SkippedDuplicate != 0 {
-		t.Errorf("expected SkippedDuplicate=0, got %d", result.SkippedDuplicate)
-	}
-	if len(result.Transactions) != 2 {
-		t.Errorf("expected 2 Transactions in result, got %d", len(result.Transactions))
-	}
-}
-
-func TestRun_SkipsDuplicates(t *testing.T) {
-	path := writeSampleBook(t)
-	src := source.NewJSON("../../testdata/transactions.json")
-	cfg := sampleConfig()
-
-	// First run.
-	importer.Run(src, path, cfg, importer.Options{})
-
-	// Second run — same source, should be all duplicates.
-	result, err := importer.Run(src, path, cfg, importer.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Imported != 0 {
-		t.Errorf("expected Imported=0 on second run, got %d", result.Imported)
-	}
-	if result.SkippedDuplicate != 2 {
-		t.Errorf("expected SkippedDuplicate=2, got %d", result.SkippedDuplicate)
+func sampleTransactions() []model.Transaction {
+	return []model.Transaction{
+		{
+			ID:          "txn-001",
+			Date:        time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+			Description: "Grocery store",
+			Amount:      decimal.NewFromFloat(-450),
+			Currency:    "UAH",
+			AccountID:   "UA123",
+			Category:    "5411",
+		},
+		{
+			ID:          "txn-002",
+			Date:        time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC),
+			Description: "Salary",
+			Amount:      decimal.NewFromFloat(50000),
+			Currency:    "UAH",
+			AccountID:   "UA123",
+			Category:    "5411",
+		},
 	}
 }
 
-func TestRun_SkipsUnmapped(t *testing.T) {
-	path := writeSampleBook(t)
-	src := source.NewJSON("../../testdata/transactions.json")
-	// Config with no matching account — all should be skipped as unmapped.
-	cfg := &config.Config{}
-
-	result, err := importer.Run(src, path, cfg, importer.Options{})
-	if err != nil {
-		t.Fatal(err)
+func crossCurrencyTxns() []model.Transaction {
+	return []model.Transaction{
+		{
+			ID:          "txn-usd",
+			Date:        time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+			Description: "Transfer",
+			Amount:      decimal.NewFromFloat(-4150),
+			Currency:    "UAH",
+			AccountID:   "UA123",
+			Category:    "6011",
+		},
 	}
-	if result.SkippedUnmapped != 2 {
-		t.Errorf("expected SkippedUnmapped=2, got %d", result.SkippedUnmapped)
-	}
-}
-
-func TestRun_DryRunDoesNotWrite(t *testing.T) {
-	path := writeSampleBook(t)
-	info, _ := os.Stat(path)
-	before := info.ModTime()
-
-	src := source.NewJSON("../../testdata/transactions.json")
-	cfg := sampleConfig()
-
-	result, err := importer.Run(src, path, cfg, importer.Options{DryRun: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	info, _ = os.Stat(path)
-	if info.ModTime() != before {
-		t.Error("dry-run modified the file")
-	}
-	if result.Imported != 2 {
-		t.Errorf("expected Imported=2, got %d", result.Imported)
-	}
-	if len(result.Transactions) != 2 {
-		t.Errorf("expected 2 transactions in result, got %d", len(result.Transactions))
-	}
-	if result.Transactions[0].ID != "txn-001" {
-		t.Errorf("expected first transaction ID txn-001 (oldest first), got %s", result.Transactions[0].ID)
-	}
-	if result.Transactions[1].ID != "txn-002" {
-		t.Errorf("expected second transaction ID txn-002 (oldest first), got %s", result.Transactions[1].ID)
-	}
-}
-
-func TestRun_DescriptionRuleOverridesMCC(t *testing.T) {
-	path := writeSampleBook(t)
-
-	// Single transaction that matches the description rule "Grocery".
-	// The config has NO mcc_rules, so if the description rule doesn't fire
-	// the importer would return an error — a passing test proves it fired.
-	txnFile, _ := os.CreateTemp(t.TempDir(), "txns*.json")
-	txnFile.WriteString(`[{"id":"txn-desc","date":"2026-07-01","description":"Grocery store","amount":-450.00,"currency":"UAH","account_id":"UA123","category":"5411"}]`)
-	txnFile.Close()
-
-	cfgFile, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
-	cfgFile.WriteString(`
-accounts:
-  - source_id: "UA123"
-    gnucash_account: "Assets:Monobank UAH"
-    description_rules:
-      - pattern: "Grocery"
-        account: "Imbalance-UAH"
-`)
-	cfgFile.Close()
-
-	cfg, err := config.Load(cfgFile.Name())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	result, err := importer.Run(source.NewJSON(txnFile.Name()), path, cfg, importer.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Imported != 1 {
-		t.Errorf("expected Imported=1, got %d", result.Imported)
-	}
-}
-
-func TestRun_SkipsTransactionMatchingSkipRule(t *testing.T) {
-	path := writeSampleBook(t)
-
-	txnFile, _ := os.CreateTemp(t.TempDir(), "txns*.json")
-	txnFile.WriteString(`[{"id":"txn-skip","date":"2026-07-01","description":"Cashback reward","amount":50.00,"currency":"UAH","account_id":"UA123","category":"9999"}]`)
-	txnFile.Close()
-
-	cfgFile, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
-	cfgFile.WriteString(`
-accounts:
-  - source_id: "UA123"
-    gnucash_account: "Assets:Monobank UAH"
-    description_rules:
-      - pattern: "Cashback"
-        account: SKIP
-`)
-	cfgFile.Close()
-
-	cfg, err := config.Load(cfgFile.Name())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	result, err := importer.Run(source.NewJSON(txnFile.Name()), path, cfg, importer.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Imported != 0 {
-		t.Errorf("expected Imported=0, got %d", result.Imported)
-	}
-	if result.SkippedRule != 1 {
-		t.Errorf("expected SkippedRule=1, got %d", result.SkippedRule)
-	}
-}
-
-func TestRun_SinceFilter(t *testing.T) {
-	path := writeSampleBook(t)
-	src := source.NewJSON("../../testdata/transactions.json")
-	cfg := sampleConfig()
-
-	since := time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC)
-	result, err := importer.Run(src, path, cfg, importer.Options{Since: since})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Imported != 1 {
-		t.Errorf("expected Imported=1, got %d", result.Imported)
-	}
-	if result.Transactions[0].ID != "txn-002" {
-		t.Errorf("expected txn-002 (on or after since date), got %s", result.Transactions[0].ID)
-	}
-}
-
-// crossCurrencyTxnJSON returns a JSON source with one UAH transaction (-4150 UAH)
-// that maps to the USD account "Assets:Savings USD" via MCC rule.
-func crossCurrencyTxnJSON(t *testing.T) string {
-	t.Helper()
-	f, _ := os.CreateTemp(t.TempDir(), "txns*.json")
-	f.WriteString(`[{"id":"txn-usd","date":"2026-07-01","description":"Transfer","amount":-4150.00,"currency":"UAH","account_id":"UA123","category":"6011"}]`)
-	f.Close()
-	return f.Name()
 }
 
 func crossCurrencyConfig(rateFetched bool) *config.Config {
@@ -316,21 +169,244 @@ func readBookRaw(t *testing.T, path string) []byte {
 	return buf.Bytes()
 }
 
+func TestRun_ImportsNewTransactions(t *testing.T) {
+	path := writeSampleBook(t)
+	result, err := importer.Run(source.NewSlice(sampleTransactions()), path, sampleConfig(), importer.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Imported != 2 {
+		t.Errorf("expected Imported=2, got %d", result.Imported)
+	}
+	if result.SkippedDuplicate != 0 {
+		t.Errorf("expected SkippedDuplicate=0, got %d", result.SkippedDuplicate)
+	}
+	if len(result.Transactions) != 2 {
+		t.Errorf("expected 2 Transactions in result, got %d", len(result.Transactions))
+	}
+}
+
+func TestRun_SkipsDuplicates(t *testing.T) {
+	path := writeSampleBook(t)
+	src := source.NewSlice(sampleTransactions())
+
+	// First run.
+	importer.Run(src, path, sampleConfig(), importer.Options{})
+
+	// Second run — same source, should be all duplicates.
+	result, err := importer.Run(src, path, sampleConfig(), importer.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Imported != 0 {
+		t.Errorf("expected Imported=0 on second run, got %d", result.Imported)
+	}
+	if result.SkippedDuplicate != 2 {
+		t.Errorf("expected SkippedDuplicate=2, got %d", result.SkippedDuplicate)
+	}
+}
+
+func TestRun_SkipsUnmapped(t *testing.T) {
+	path := writeSampleBook(t)
+	result, err := importer.Run(source.NewSlice(sampleTransactions()), path, &config.Config{}, importer.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SkippedUnmapped != 2 {
+		t.Errorf("expected SkippedUnmapped=2, got %d", result.SkippedUnmapped)
+	}
+}
+
+func TestRun_DryRunDoesNotWrite(t *testing.T) {
+	path := writeSampleBook(t)
+	info, _ := os.Stat(path)
+	before := info.ModTime()
+
+	result, err := importer.Run(source.NewSlice(sampleTransactions()), path, sampleConfig(), importer.Options{DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	info, _ = os.Stat(path)
+	if info.ModTime() != before {
+		t.Error("dry-run modified the file")
+	}
+	if result.Imported != 2 {
+		t.Errorf("expected Imported=2, got %d", result.Imported)
+	}
+	if len(result.Transactions) != 2 {
+		t.Errorf("expected 2 transactions in result, got %d", len(result.Transactions))
+	}
+	if result.Transactions[0].ID != "txn-001" {
+		t.Errorf("expected first transaction ID txn-001 (oldest first), got %s", result.Transactions[0].ID)
+	}
+	if result.Transactions[1].ID != "txn-002" {
+		t.Errorf("expected second transaction ID txn-002 (oldest first), got %s", result.Transactions[1].ID)
+	}
+}
+
+func TestRun_DescriptionRuleOverridesMCC(t *testing.T) {
+	path := writeSampleBook(t)
+
+	txns := []model.Transaction{
+		{
+			ID:          "txn-desc",
+			Date:        time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+			Description: "Grocery store",
+			Amount:      decimal.NewFromFloat(-450),
+			Currency:    "UAH",
+			AccountID:   "UA123",
+			Category:    "5411",
+		},
+	}
+
+	cfgFile, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+	cfgFile.WriteString(`
+accounts:
+  - source_id: "UA123"
+    gnucash_account: "Assets:Monobank UAH"
+    description_rules:
+      - pattern: "Grocery"
+        account: "Imbalance-UAH"
+`)
+	cfgFile.Close()
+
+	cfg, err := config.Load(cfgFile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := importer.Run(source.NewSlice(txns), path, cfg, importer.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Imported != 1 {
+		t.Errorf("expected Imported=1, got %d", result.Imported)
+	}
+}
+
+func TestRun_DescriptionRuleNewDescription(t *testing.T) {
+	path := writeSampleBook(t)
+
+	txns := []model.Transaction{
+		{
+			ID:          "txn-rename",
+			Date:        time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+			Description: "PAYPAL *SHOP 123",
+			Amount:      decimal.NewFromFloat(-100),
+			Currency:    "UAH",
+			AccountID:   "UA123",
+			Category:    "5411",
+		},
+	}
+
+	cfgFile, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+	cfgFile.WriteString(`
+accounts:
+  - source_id: "UA123"
+    gnucash_account: "Assets:Monobank UAH"
+    description_rules:
+      - pattern: "PAYPAL"
+        new_description: "PayPal payment"
+        account: "Imbalance-UAH"
+`)
+	cfgFile.Close()
+
+	cfg, err := config.Load(cfgFile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := importer.Run(source.NewSlice(txns), path, cfg, importer.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Imported != 1 {
+		t.Fatalf("expected Imported=1, got %d", result.Imported)
+	}
+	if len(result.Transactions) != 1 {
+		t.Fatalf("expected 1 transaction in result, got %d", len(result.Transactions))
+	}
+	if result.Transactions[0].Description != "PayPal payment" {
+		t.Errorf("expected rewritten description, got %q", result.Transactions[0].Description)
+	}
+
+	raw := string(readBookRaw(t, path))
+	if !strings.Contains(raw, "<trn:description>PayPal payment</trn:description>") {
+		t.Errorf("expected rewritten description in GnuCash file")
+	}
+}
+
+func TestRun_SkipsTransactionMatchingSkipRule(t *testing.T) {
+	path := writeSampleBook(t)
+
+	txns := []model.Transaction{
+		{
+			ID:          "txn-skip",
+			Date:        time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+			Description: "Cashback reward",
+			Amount:      decimal.NewFromFloat(50),
+			Currency:    "UAH",
+			AccountID:   "UA123",
+			Category:    "9999",
+		},
+	}
+
+	cfgFile, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+	cfgFile.WriteString(`
+accounts:
+  - source_id: "UA123"
+    gnucash_account: "Assets:Monobank UAH"
+    description_rules:
+      - pattern: "Cashback"
+        account: SKIP
+`)
+	cfgFile.Close()
+
+	cfg, err := config.Load(cfgFile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := importer.Run(source.NewSlice(txns), path, cfg, importer.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Imported != 0 {
+		t.Errorf("expected Imported=0, got %d", result.Imported)
+	}
+	if result.SkippedRule != 1 {
+		t.Errorf("expected SkippedRule=1, got %d", result.SkippedRule)
+	}
+}
+
+func TestRun_SinceFilter(t *testing.T) {
+	path := writeSampleBook(t)
+	since := time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC)
+	result, err := importer.Run(source.NewSlice(sampleTransactions()), path, sampleConfig(), importer.Options{Since: since})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Imported != 1 {
+		t.Errorf("expected Imported=1, got %d", result.Imported)
+	}
+	if result.Transactions[0].ID != "txn-002" {
+		t.Errorf("expected txn-002 (on or after since date), got %s", result.Transactions[0].ID)
+	}
+}
+
 // TestRun_CrossCurrency_UsesRateFromCache verifies that when a UAH transaction
 // maps to a USD counterpart account and the rate is already cached in config,
 // the credit split quantity is written in USD, not UAH.
 func TestRun_CrossCurrency_UsesRateFromCache(t *testing.T) {
 	path := writeSampleBook(t)
-	cfg := crossCurrencyConfig(true) // rate pre-loaded in cache
-
-	_, err := importer.Run(source.NewJSON(crossCurrencyTxnJSON(t)), path, cfg, importer.Options{})
+	_, err := importer.Run(source.NewSlice(crossCurrencyTxns()), path, crossCurrencyConfig(true), importer.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	raw := readBookRaw(t, path)
 	// Credit split (USD account) quantity must be +10000/100 (= +100 USD).
-	// Debit split (UAH account) value/quantity must be -415000/100.
 	if !strings.Contains(string(raw), "10000/100") {
 		t.Error("expected USD credit quantity 10000/100 in book XML")
 	}
@@ -341,7 +417,7 @@ func TestRun_CrossCurrency_UsesRateFromCache(t *testing.T) {
 // uses it to compute the credit split quantity.
 func TestRun_CrossCurrency_FetchesRateWhenMissing(t *testing.T) {
 	path := writeSampleBook(t)
-	cfg := crossCurrencyConfig(false) // no rate in cache
+	cfg := crossCurrencyConfig(false)
 
 	fetchCalled := false
 	fakeFetcher := func() (map[string]decimal.Decimal, error) {
@@ -351,8 +427,7 @@ func TestRun_CrossCurrency_FetchesRateWhenMissing(t *testing.T) {
 		}, nil
 	}
 
-	_, err := importer.Run(source.NewJSON(crossCurrencyTxnJSON(t)), path, cfg,
-		importer.Options{RateFetcher: fakeFetcher})
+	_, err := importer.Run(source.NewSlice(crossCurrencyTxns()), path, cfg, importer.Options{RateFetcher: fakeFetcher})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,7 +435,6 @@ func TestRun_CrossCurrency_FetchesRateWhenMissing(t *testing.T) {
 	if !fetchCalled {
 		t.Error("expected RateFetcher to be called when rate not in cache")
 	}
-	// Rate should now be in the in-memory cache for future transactions.
 	rate, ok := cfg.GetRate("USD", "UAH")
 	if !ok {
 		t.Fatal("expected USD/UAH to be cached after fetch")
