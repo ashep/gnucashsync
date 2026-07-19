@@ -119,13 +119,55 @@ func TestConfig_Save_PersistsCurrencyCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.SetRate("USD", "UAH", decimal.NewFromFloat(41.5))
-	if err := cfg.Save(); err != nil {
-		t.Fatalf("Save: %v", err)
+	if err := cfg.SaveCurrencyCache(); err != nil {
+		t.Fatalf("SaveCurrencyCache: %v", err)
 	}
 
 	cfg2, err := config.Load(f.Name())
 	if err != nil {
 		t.Fatalf("reload: %v", err)
+	}
+	rate, ok := cfg2.GetRate("USD", "UAH")
+	if !ok {
+		t.Fatal("expected USD/UAH rate after reload")
+	}
+	if !rate.Equal(decimal.NewFromFloat(41.5)) {
+		t.Errorf("expected 41.5 after reload, got %s", rate)
+	}
+}
+
+func TestConfig_SaveCurrencyCache_PreservesAccountsWhenFiltered(t *testing.T) {
+	f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+	_, err := f.WriteString(`book: /tmp/test.gnucash
+accounts:
+  - source_id: "UA111"
+    gnucash_account: "Assets:One"
+  - source_id: "UA222"
+    gnucash_account: "Assets:Two"
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	cfg, err := config.Load(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate the old --account bug: in-memory config keeps only one account.
+	cfg.Accounts = []config.AccountEntry{cfg.Accounts[0]}
+	cfg.SetRate("USD", "UAH", decimal.NewFromFloat(41.5))
+	if err := cfg.SaveCurrencyCache(); err != nil {
+		t.Fatalf("SaveCurrencyCache: %v", err)
+	}
+
+	cfg2, err := config.Load(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg2.Accounts) != 2 {
+		t.Fatalf("expected 2 accounts on disk, got %d", len(cfg2.Accounts))
 	}
 	rate, ok := cfg2.GetRate("USD", "UAH")
 	if !ok {

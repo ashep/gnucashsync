@@ -17,10 +17,11 @@ import (
 
 // Options controls optional behaviour of Run.
 type Options struct {
-	DryRun      bool
-	Since       time.Time // zero means no filter
-	Until       time.Time // zero means no filter
-	RateFetcher func() (map[string]decimal.Decimal, error)
+	DryRun        bool
+	Since         time.Time // zero means no filter
+	Until         time.Time // zero means no filter
+	AccountFilter string    // non-empty: only import this source_id
+	RateFetcher   func() (map[string]decimal.Decimal, error)
 }
 
 // Result summarizes an import run.
@@ -63,6 +64,9 @@ func Run(src source.Source, gnucashPath string, cfg *config.Config, opts Options
 	)
 
 	for _, t := range txns {
+		if opts.AccountFilter != "" && t.AccountID != opts.AccountFilter {
+			continue
+		}
 		if !opts.Since.IsZero() && t.Date.Before(opts.Since) {
 			continue
 		}
@@ -144,7 +148,7 @@ func Run(src source.Source, gnucashPath string, cfg *config.Config, opts Options
 							cfg.SetRate(k[:3], k[4:], v)
 						}
 					}
-					if err := cfg.Save(); err != nil {
+					if err := cfg.SaveCurrencyCache(); err != nil {
 						log.Printf("warning: could not save rate cache: %v", err)
 					}
 					rate = cfg.GetRateOrZero(counterpart.Currency, t.Currency)

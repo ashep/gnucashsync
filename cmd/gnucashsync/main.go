@@ -62,16 +62,16 @@ func main() {
 	}
 
 	if *account != "" {
-		var filtered []config.AccountEntry
+		found := false
 		for _, a := range conf.Accounts {
 			if a.SourceID == *account {
-				filtered = append(filtered, a)
+				found = true
+				break
 			}
 		}
-		if len(filtered) == 0 {
+		if !found {
 			log.Fatalf("no account with source_id %q found in config", *account)
 		}
-		conf.Accounts = filtered
 	}
 
 	if *file == "" {
@@ -122,14 +122,21 @@ func main() {
 	case "monobank":
 		var monobankIDs []string
 		for _, a := range conf.Accounts {
-			monobankIDs = append(monobankIDs, a.SourceID)
+			if *account == "" || a.SourceID == *account {
+				monobankIDs = append(monobankIDs, a.SourceID)
+			}
 		}
 		s = source.NewMonobank(conf.Sources.Monobank.Token, monobankIDs, since, until)
 	default:
 		log.Fatalf("unknown source %q; valid: privatbank, monobank", *src)
 	}
 
-	result, err := importer.Run(s, *file, conf, importer.Options{DryRun: *dryRun, Since: since, Until: until})
+	result, err := importer.Run(s, *file, conf, importer.Options{
+		DryRun:        *dryRun,
+		Since:         since,
+		Until:         until,
+		AccountFilter: *account,
+	})
 	if err != nil {
 		log.Fatalf("import failed: %v", err)
 	}

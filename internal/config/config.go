@@ -132,8 +132,8 @@ func (c *Config) SetRate(from, to string, rate decimal.Decimal) {
 	}
 }
 
-// Save writes the config (including any cached rates) back to the file it was loaded from.
-// Does nothing if Path is empty.
+// Save writes the entire config to the file it was loaded from.
+// Prefer SaveCurrencyCache when only exchange rates changed.
 func (c *Config) Save() error {
 	if c.Path == "" {
 		return nil
@@ -143,6 +143,21 @@ func (c *Config) Save() error {
 		return err
 	}
 	return os.WriteFile(c.Path, data, 0600)
+}
+
+// SaveCurrencyCache persists only currency_cache (and reads the latest config
+// from disk first) so in-memory subsets — e.g. after --account filtering —
+// cannot overwrite unrelated sections like accounts.
+func (c *Config) SaveCurrencyCache() error {
+	if c.Path == "" {
+		return nil
+	}
+	onDisk, err := Load(c.Path)
+	if err != nil {
+		return fmt.Errorf("reading config for currency cache update: %w", err)
+	}
+	onDisk.CurrencyCache = c.CurrencyCache
+	return onDisk.Save()
 }
 
 func Load(path string) (*Config, error) {
