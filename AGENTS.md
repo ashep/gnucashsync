@@ -107,12 +107,14 @@ accounts:
         account: "Expenses:Subscriptions"
     mcc_rules: {}                 # optional per-account overrides
 
+currency_cache_ttl: 24h        # optional; default 24h. Go duration string.
 currency_cache:                  # auto-populated exchange rates (Monobank API)
   USD/UAH:
     rate: "41.5"
+    updated_at: "2026-07-19T10:00:00Z"
 ```
 
-GnuCash account paths are colon-separated, case-sensitive, and must exist in the book. `config.Save()` persists `currency_cache` updates back to the config file.
+GnuCash account paths are colon-separated, case-sensitive, and must exist in the book. `config.Save()` persists `currency_cache` updates back to the config file. Cached rates expire after `currency_cache_ttl` (default 24h); expired or legacy entries without `updated_at` are re-fetched from Monobank on the next cross-currency import.
 
 ## Adding a new source
 

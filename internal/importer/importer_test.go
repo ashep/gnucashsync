@@ -3,6 +3,7 @@ package importer_test
 import (
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -145,6 +146,36 @@ func crossCurrencyConfig(rateFetched bool) *config.Config {
 	if rateFetched {
 		// USD/UAH = 41.5 → -4150 UAH / 41.5 = -100 USD → credit qty = +10000/100
 		cfg.SetRate("USD", "UAH", decimal.NewFromFloat(41.5))
+	}
+	return cfg
+}
+
+func crossCurrencyConfigExpiredRate(t *testing.T) *config.Config {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "config*.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-config.DefaultCurrencyCacheTTL - time.Hour).UTC().Format(time.RFC3339)
+	_, err = fmt.Fprintf(f, `
+accounts:
+  - source_id: "UA123"
+    gnucash_account: "Assets:Monobank UAH"
+    mcc_rules:
+      "6011": "Assets:Savings USD"
+currency_cache:
+  USD/UAH:
+    rate: "40.0"
+    updated_at: %q
+`, old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	cfg, err := config.Load(f.Name())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
 	}
 	return cfg
 }
@@ -446,5 +477,36 @@ func TestRun_CrossCurrency_FetchesRateWhenMissing(t *testing.T) {
 	raw := readBookRaw(t, path)
 	if !strings.Contains(string(raw), "10000/100") {
 		t.Error("expected USD credit quantity 10000/100 in book XML")
+	}
+}
+
+// TestRun_CrossCurrency_RefetchesExpiredRate verifies that an expired cache entry
+// triggers a fresh fetch instead of reusing the stale rate.
+func TestRun_CrossCurrency_RefetchesExpiredRate(t *testing.T) {
+	path := writeSampleBook(t)
+	cfg := crossCurrencyConfigExpiredRate(t)
+
+	fetchCalled := false
+	fakeFetcher := func() (map[string]decimal.Decimal, error) {
+		fetchCalled = true
+		return map[string]decimal.Decimal{
+			"USD/UAH": decimal.NewFromFloat(41.5),
+		}, nil
+	}
+
+	_, err := importer.Run(source.NewSlice(crossCurrencyTxns()), path, cfg, importer.Options{RateFetcher: fakeFetcher})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !fetchCalled {
+		t.Fatal("expected RateFetcher to be called when cached rate is expired")
+	}
+	rate, ok := cfg.GetRate("USD", "UAH")
+	if !ok {
+		t.Fatal("expected USD/UAH to be cached after fetch")
+	}
+	if !rate.Equal(decimal.NewFromFloat(41.5)) {
+		t.Errorf("cached rate: expected 41.5, got %s", rate)
 	}
 }

@@ -4,10 +4,14 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"time"
 
 	"github.com/shopspring/decimal"
 	"gopkg.in/yaml.v3"
 )
+
+// DefaultCurrencyCacheTTL is how long cached exchange rates remain valid.
+const DefaultCurrencyCacheTTL = 24 * time.Hour
 
 const SkipAccount = "SKIP"
 
@@ -63,23 +67,45 @@ func (e *AccountEntry) ResolveCounterpart(description, category string, amount d
 }
 
 type currencyRateEntry struct {
-	Rate string `yaml:"rate"`
+	Rate      string    `yaml:"rate"`
+	UpdatedAt time.Time `yaml:"updated_at,omitempty"`
 }
 
 type Config struct {
-	Path          string                       `yaml:"-"`
-	Book          string                       `yaml:"book"`
-	Sources       Sources                      `yaml:"sources"`
-	MCCRules      map[string]string            `yaml:"mcc_rules,omitempty"`
-	Accounts      []AccountEntry               `yaml:"accounts"`
-	CurrencyCache map[string]currencyRateEntry `yaml:"currency_cache,omitempty"`
+	Path             string                       `yaml:"-"`
+	Book             string                       `yaml:"book"`
+	Sources          Sources                      `yaml:"sources"`
+	MCCRules         map[string]string            `yaml:"mcc_rules,omitempty"`
+	Accounts         []AccountEntry               `yaml:"accounts"`
+	CurrencyCacheTTL string                       `yaml:"currency_cache_ttl,omitempty"`
+	CurrencyCache    map[string]currencyRateEntry `yaml:"currency_cache,omitempty"`
+	currencyCacheTTL time.Duration
 }
 
-// GetRate returns the cached exchange rate for the given currency pair.
-// The key is "FROM/TO", e.g. GetRate("USD","UAH") → rate meaning 1 USD = rate UAH.
+func (c *Config) currencyCacheTTLDuration() time.Duration {
+	if c.currencyCacheTTL > 0 {
+		return c.currencyCacheTTL
+	}
+	return DefaultCurrencyCacheTTL
+}
+
+func (c *Config) rateEntryValid(entry currencyRateEntry, now time.Time) bool {
+	if entry.UpdatedAt.IsZero() {
+		return false
+	}
+	return now.Sub(entry.UpdatedAt) < c.currencyCacheTTLDuration()
+}
+
+// GetRate returns the cached exchange rate for the given currency pair when it
+// has not expired. The key is "FROM/TO", e.g. GetRate("USD","UAH") → rate meaning 1 USD = rate UAH.
 func (c *Config) GetRate(from, to string) (decimal.Decimal, bool) {
+	return c.GetRateAt(from, to, time.Now())
+}
+
+// GetRateAt is like GetRate but uses the given time for TTL checks (mainly for tests).
+func (c *Config) GetRateAt(from, to string, now time.Time) (decimal.Decimal, bool) {
 	entry, ok := c.CurrencyCache[from+"/"+to]
-	if !ok {
+	if !ok || !c.rateEntryValid(entry, now) {
 		return decimal.Zero, false
 	}
 	rate, err := decimal.NewFromString(entry.Rate)
@@ -100,7 +126,10 @@ func (c *Config) SetRate(from, to string, rate decimal.Decimal) {
 	if c.CurrencyCache == nil {
 		c.CurrencyCache = make(map[string]currencyRateEntry)
 	}
-	c.CurrencyCache[from+"/"+to] = currencyRateEntry{Rate: rate.String()}
+	c.CurrencyCache[from+"/"+to] = currencyRateEntry{
+		Rate:      rate.String(),
+		UpdatedAt: time.Now(),
+	}
 }
 
 // Save writes the config (including any cached rates) back to the file it was loaded from.
@@ -126,6 +155,11 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	cfg.Path = path
+	ttl, err := parseCurrencyCacheTTL(cfg.CurrencyCacheTTL)
+	if err != nil {
+		return nil, err
+	}
+	cfg.currencyCacheTTL = ttl
 	for i := range cfg.Accounts {
 		for j := range cfg.Accounts[i].DescriptionRules {
 			r := &cfg.Accounts[i].DescriptionRules[j]
@@ -144,6 +178,20 @@ func Load(path string) (*Config, error) {
 		}
 	}
 	return &cfg, nil
+}
+
+func parseCurrencyCacheTTL(s string) (time.Duration, error) {
+	if s == "" {
+		return DefaultCurrencyCacheTTL, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("currency_cache_ttl: invalid duration %q: %w", s, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("currency_cache_ttl: must be positive")
+	}
+	return d, nil
 }
 
 func (c *Config) AccountMapping(sourceID string) (AccountEntry, bool) {

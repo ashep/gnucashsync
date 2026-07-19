@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"testing"
+	"time"
 
 	"github.com/shopspring/decimal"
 
@@ -54,6 +55,57 @@ func TestConfig_GetRate_Missing(t *testing.T) {
 	_, ok := cfg.GetRate("USD", "UAH")
 	if ok {
 		t.Fatal("expected no rate on empty config")
+	}
+}
+
+func TestConfig_GetRate_Expired(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.SetRate("USD", "UAH", decimal.NewFromFloat(41.5))
+
+	future := time.Now().Add(config.DefaultCurrencyCacheTTL + time.Minute)
+	_, ok := cfg.GetRateAt("USD", "UAH", future)
+	if ok {
+		t.Fatal("expected expired rate to be treated as missing")
+	}
+}
+
+func TestConfig_GetRate_LegacyEntryWithoutUpdatedAt(t *testing.T) {
+	cfg := loadConfig(t, `
+currency_cache:
+  USD/UAH:
+    rate: "41.5"
+`)
+	_, ok := cfg.GetRate("USD", "UAH")
+	if ok {
+		t.Fatal("expected legacy cache entry without updated_at to be treated as expired")
+	}
+}
+
+func TestLoad_CurrencyCacheTTL(t *testing.T) {
+	cfg := loadConfig(t, `
+currency_cache_ttl: 1h
+`)
+	cfg.SetRate("USD", "UAH", decimal.NewFromFloat(41.5))
+
+	base := time.Now()
+	_, ok := cfg.GetRateAt("USD", "UAH", base.Add(30*time.Minute))
+	if !ok {
+		t.Fatal("expected rate to be valid within custom TTL")
+	}
+	_, ok = cfg.GetRateAt("USD", "UAH", base.Add(2*time.Hour))
+	if ok {
+		t.Fatal("expected rate to expire after custom TTL")
+	}
+}
+
+func TestLoad_InvalidCurrencyCacheTTL(t *testing.T) {
+	f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+	f.WriteString("currency_cache_ttl: not-a-duration\n")
+	f.Close()
+
+	_, err := config.Load(f.Name())
+	if err == nil {
+		t.Fatal("expected error for invalid currency_cache_ttl")
 	}
 }
 
