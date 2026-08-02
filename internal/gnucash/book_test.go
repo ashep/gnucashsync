@@ -116,6 +116,36 @@ func TestNewTransactionXML_EscapesSpecialChars(t *testing.T) {
 	}
 }
 
+// TestNewTransactionXML_PostedNeutralTime verifies that date-posted uses the
+// transaction's own calendar day stamped at GnuCash's day-neutral 10:59:00 UTC,
+// so imported transactions sort alongside GnuCash-entered ones instead of
+// always sorting before them.
+func TestNewTransactionXML_PostedNeutralTime(t *testing.T) {
+	kyiv := time.FixedZone("EEST", 3*60*60)
+	// 01:30 local on 15 July is 22:30 UTC on 14 July: the local day must win.
+	date := time.Date(2026, 7, 15, 1, 30, 0, 0, kyiv)
+
+	xml := gnucash.NewTransactionXML(
+		"txn-posted-01", "Late night", "UAH", date,
+		decimal.NewFromFloat(-100),
+		"debitguid00000000000000000000001",
+		"creditguid0000000000000000000001",
+		decimal.Zero, "",
+	)
+
+	wantPosted := "<trn:date-posted><ts:date>2026-07-15 10:59:00 +0000</ts:date></trn:date-posted>"
+	if !strings.Contains(xml, wantPosted) {
+		t.Errorf("expected posted %q in XML:\n%s", wantPosted, xml)
+	}
+
+	// date-entered keeps the exact instant (in UTC); GnuCash uses it to order
+	// transactions within a day.
+	wantEntered := "<trn:date-entered><ts:date>2026-07-14 22:30:00 +0000</ts:date></trn:date-entered>"
+	if !strings.Contains(xml, wantEntered) {
+		t.Errorf("expected entered %q in XML:\n%s", wantEntered, xml)
+	}
+}
+
 // TestNewTransactionXML_MultiCurrency verifies that when a UAH bank account
 // makes a foreign-currency purchase, the counterpart split's quantity is
 // written in the operation currency (USD), not in UAH.

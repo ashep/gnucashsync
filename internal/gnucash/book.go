@@ -75,7 +75,17 @@ func NewTransactionXML(
 	split1GUID := newGUID()
 	split2GUID := newGUID()
 
-	posted := date.UTC().Format("2006-01-02 00:00:00 +0000")
+	// GnuCash stores date-posted as a day-neutral timestamp: the calendar day at
+	// 10:59:00 UTC. Using anything else (e.g. midnight) makes imported
+	// transactions sort before every GnuCash-entered transaction of the same day,
+	// because the register compares posted timestamps, not calendar days. The day
+	// is taken in the transaction's own location, so a 01:30 local operation stays
+	// on its local day instead of shifting to the previous UTC one.
+	y, m, d := date.Date()
+	posted := time.Date(y, m, d, 10, 59, 0, 0, time.UTC).Format("2006-01-02 15:04:05 +0000")
+
+	// date-entered keeps the exact instant: GnuCash orders transactions within a
+	// day by it once the posted timestamps tie.
 	entered := date.UTC().Format("2006-01-02 15:04:05 +0000")
 
 	debitVal := toRational(amount)
