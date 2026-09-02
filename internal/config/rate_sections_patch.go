@@ -8,48 +8,67 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// patchCurrencyCacheInFile updates only the currency_cache section of a YAML
-// config file, preserving formatting elsewhere.
-func patchCurrencyCacheInFile(path string, cache map[string]currencyRateEntry) error {
+// patchRateSectionsInFile updates only the rate-bearing sections of a YAML config
+// file, preserving formatting elsewhere.
+func patchRateSectionsInFile(path string, cache map[string]currencyRateEntry, history map[string]map[string]string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	block, err := marshalCurrencyCacheBlock(cache)
+
+	cacheBlock, err := marshalSectionBlock("currency_cache", cache)
 	if err != nil {
 		return err
 	}
-	patched, err := replaceCurrencyCacheSection(data, block)
+	data, err = replaceSection(data, "currency_cache", cacheBlock)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, patched, 0600)
+
+	historyBlock, err := marshalSectionBlock("rate_history", history)
+	if err != nil {
+		return err
+	}
+	data, err = replaceSection(data, "rate_history", historyBlock)
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(path, data, 0600)
 }
 
-func marshalCurrencyCacheBlock(cache map[string]currencyRateEntry) ([]byte, error) {
-	if len(cache) == 0 {
+// marshalSectionBlock renders a single top-level mapping as a YAML block, or
+// nothing at all when it is empty so the section is dropped from the file.
+func marshalSectionBlock(name string, value any) ([]byte, error) {
+	node := yaml.Node{Kind: yaml.MappingNode}
+	valueNode := &yaml.Node{}
+	if err := valueNode.Encode(value); err != nil {
+		return nil, err
+	}
+	if len(valueNode.Content) == 0 {
 		return nil, nil
 	}
-	wrapper := struct {
-		CurrencyCache map[string]currencyRateEntry `yaml:"currency_cache"`
-	}{CurrencyCache: cache}
-	return yaml.Marshal(wrapper)
+	node.Content = append(node.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: name},
+		valueNode,
+	)
+	return yaml.Marshal(&node)
 }
 
-func replaceCurrencyCacheSection(content, block []byte) ([]byte, error) {
+func replaceSection(content []byte, name string, block []byte) ([]byte, error) {
 	if len(block) > 0 && !bytes.HasSuffix(block, []byte("\n")) {
 		block = append(block, '\n')
 	}
 
 	lines, trailingNewline := splitConfigLines(content)
-	start, comment := findCurrencyCacheSection(lines)
+	start, comment := findSection(lines, name)
 
 	if start < 0 {
 		if len(block) == 0 {
 			return content, nil
 		}
-		block = applyCurrencyCacheComment(block, comment)
-		return appendCurrencyCacheSection(content, block), nil
+		block = applySectionComment(block, comment)
+		return appendSection(content, block), nil
 	}
 
 	end := start + 1
@@ -63,9 +82,9 @@ func replaceCurrencyCacheSection(content, block []byte) ([]byte, error) {
 	}
 
 	if comment == "" {
-		comment = extractCurrencyCacheComment(lines[start])
+		comment = extractSectionComment(lines[start], name)
 	}
-	block = applyCurrencyCacheComment(block, comment)
+	block = applySectionComment(block, comment)
 
 	var out []string
 	out = append(out, lines[:start]...)
@@ -97,33 +116,31 @@ func joinConfigLines(lines []string, trailingNewline bool) []byte {
 	return []byte(out)
 }
 
-func findCurrencyCacheSection(lines []string) (start int, comment string) {
+func findSection(lines []string, name string) (start int, comment string) {
 	for i, line := range lines {
-		if isCurrencyCacheLine(line) {
-			return i, extractCurrencyCacheComment(line)
+		if isSectionLine(line, name) {
+			return i, extractSectionComment(line, name)
 		}
 	}
 	return -1, ""
 }
 
-func isCurrencyCacheLine(line string) bool {
-	trimmed := strings.TrimSpace(line)
-	return strings.HasPrefix(trimmed, "currency_cache:")
+func isSectionLine(line, name string) bool {
+	return strings.HasPrefix(strings.TrimSpace(line), name+":")
 }
 
-func extractCurrencyCacheComment(line string) string {
+func extractSectionComment(line, name string) string {
 	idx := strings.Index(line, "#")
 	if idx < 0 {
 		return ""
 	}
-	prefix := strings.TrimSpace(line[:idx])
-	if !strings.HasPrefix(prefix, "currency_cache:") {
+	if !strings.HasPrefix(strings.TrimSpace(line[:idx]), name+":") {
 		return ""
 	}
 	return strings.TrimSpace(line[idx:])
 }
 
-func applyCurrencyCacheComment(block []byte, comment string) []byte {
+func applySectionComment(block []byte, comment string) []byte {
 	if comment == "" || len(block) == 0 {
 		return block
 	}
@@ -142,7 +159,7 @@ func isNestedOrBlankLine(line string) bool {
 	return line[0] == ' ' || line[0] == '\t'
 }
 
-func appendCurrencyCacheSection(content, block []byte) []byte {
+func appendSection(content, block []byte) []byte {
 	if len(content) == 0 {
 		return block
 	}

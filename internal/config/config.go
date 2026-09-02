@@ -80,6 +80,10 @@ type Config struct {
 	Accounts         []AccountEntry               `yaml:"accounts"`
 	CurrencyCacheTTL string                       `yaml:"currency_cache_ttl,omitempty"`
 	CurrencyCache    map[string]currencyRateEntry `yaml:"currency_cache,omitempty"`
+	// RateHistory holds official rates as they stood on a given day, keyed
+	// "YYYY-MM-DD" then "FROM/TO". Unlike CurrencyCache these never expire: the
+	// rate for a past date does not change.
+	RateHistory      map[string]map[string]string `yaml:"rate_history,omitempty"`
 	currencyCacheTTL time.Duration
 }
 
@@ -116,10 +120,94 @@ func (c *Config) GetRateAt(from, to string, now time.Time) (decimal.Decimal, boo
 	return rate, true
 }
 
-// GetRateOrZero returns the cached rate, or zero if not found or malformed.
-func (c *Config) GetRateOrZero(from, to string) decimal.Decimal {
-	rate, _ := c.GetRate(from, to)
-	return rate
+// ratePivot is the currency every rate source used here quotes against, and so
+// the one cross rates are derived through.
+const ratePivot = "UAH"
+
+// rateDateKey formats a date as it is keyed in RateHistory.
+func rateDateKey(date time.Time) string { return date.Format("2006-01-02") }
+
+// convertWith converts amount between two currencies using lookup, which reports
+// the rate meaning "1 from = rate to". Sources publish only one direction of each
+// pair — Monobank quotes EUR/USD but never USD/EUR, and NBU quotes nothing but
+// X/UAH — so the inverse pair is used by division, and a missing cross rate is
+// derived through ratePivot.
+func convertWith(amount decimal.Decimal, from, to string, lookup func(a, b string) (decimal.Decimal, bool)) (decimal.Decimal, bool) {
+	if from == to {
+		return amount, true
+	}
+	if rate, ok := lookup(from, to); ok {
+		return amount.Mul(rate), true
+	}
+	if rate, ok := lookup(to, from); ok {
+		return amount.Div(rate), true
+	}
+	if from != ratePivot && to != ratePivot {
+		fromPivot, fromOK := lookup(from, ratePivot)
+		toPivot, toOK := lookup(to, ratePivot)
+		if fromOK && toOK {
+			return amount.Mul(fromPivot).Div(toPivot), true
+		}
+	}
+	return decimal.Zero, false
+}
+
+// ConvertAmount converts amount between currencies at the current cached rates,
+// returning false when the pair cannot be resolved.
+func (c *Config) ConvertAmount(amount decimal.Decimal, from, to string) (decimal.Decimal, bool) {
+	return convertWith(amount, from, to, func(a, b string) (decimal.Decimal, bool) {
+		rate, ok := c.GetRate(a, b)
+		return rate, ok && !rate.IsZero()
+	})
+}
+
+// ConvertAmountOn converts amount between currencies at the rates recorded for
+// the given date, returning false when that date has no usable rates. It never
+// falls back to current rates: the caller decides whether that substitution is
+// acceptable.
+func (c *Config) ConvertAmountOn(amount decimal.Decimal, from, to string, date time.Time) (decimal.Decimal, bool) {
+	return convertWith(amount, from, to, func(a, b string) (decimal.Decimal, bool) {
+		return c.historicalRate(date, a, b)
+	})
+}
+
+func (c *Config) historicalRate(date time.Time, from, to string) (decimal.Decimal, bool) {
+	raw, ok := c.RateHistory[rateDateKey(date)][from+"/"+to]
+	if !ok {
+		return decimal.Zero, false
+	}
+	rate, err := decimal.NewFromString(raw)
+	if err != nil || rate.IsZero() {
+		return decimal.Zero, false
+	}
+	return rate, true
+}
+
+// HasHistoricalRates reports whether rates for the given date have already been
+// recorded, so callers can avoid re-fetching a date they have already resolved.
+func (c *Config) HasHistoricalRates(date time.Time) bool {
+	return len(c.RateHistory[rateDateKey(date)]) > 0
+}
+
+// SetHistoricalRates records the rates in effect on the given date. Call
+// SaveRates to persist. Rates for a past date are immutable, so an existing
+// entry for the date is kept and only missing pairs are added.
+func (c *Config) SetHistoricalRates(date time.Time, rates map[string]decimal.Decimal) {
+	if len(rates) == 0 {
+		return
+	}
+	if c.RateHistory == nil {
+		c.RateHistory = make(map[string]map[string]string)
+	}
+	key := rateDateKey(date)
+	if c.RateHistory[key] == nil {
+		c.RateHistory[key] = make(map[string]string, len(rates))
+	}
+	for pair, rate := range rates {
+		if _, exists := c.RateHistory[key][pair]; !exists {
+			c.RateHistory[key][pair] = rate.String()
+		}
+	}
 }
 
 // SetRate stores an exchange rate in the in-memory cache. Call Save to persist.
@@ -149,10 +237,16 @@ func (c *Config) Save() error {
 // SaveCurrencyCache persists only currency_cache by patching that section in the
 // config file, leaving user formatting elsewhere intact.
 func (c *Config) SaveCurrencyCache() error {
+	return c.SaveRates()
+}
+
+// SaveRates persists the currency_cache and rate_history sections by patching
+// just those parts of the config file, leaving user formatting elsewhere intact.
+func (c *Config) SaveRates() error {
 	if c.Path == "" {
 		return nil
 	}
-	return patchCurrencyCacheInFile(c.Path, c.CurrencyCache)
+	return patchRateSectionsInFile(c.Path, c.CurrencyCache, c.RateHistory)
 }
 
 func Load(path string) (*Config, error) {

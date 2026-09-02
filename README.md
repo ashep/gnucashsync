@@ -138,8 +138,16 @@ accounts:
       - pattern: ".*"
         account: "Imbalance-UAH"
 
-# Auto-populated exchange rates for cross-currency transactions (Monobank API).
-# gnucashsync updates this section automatically when rates are fetched.
+# Auto-populated exchange rates for cross-currency transactions.
+# gnucashsync updates both sections automatically when rates are fetched.
+# rate_history holds the rates as they stood on a given day and is what
+# conversions normally use; currency_cache holds current rates and is only a
+# fallback for days that have no published rate yet.
+rate_history:
+  "2026-08-27":
+    EUR/USD: "1.1645"
+    USD/UAH: "44.5717"
+    EUR/UAH: "52.008"
 currency_cache:
   USD/UAH:
     rate: "41.5"
@@ -219,7 +227,27 @@ days; use `--since` and `--until` to narrow the range.
 server and retries automatically.
 
 **Cross-currency transactions:** when a transaction's counterpart account is in a different currency, gnucashsync
-fetches exchange rates from the Monobank public API and caches them in `currency_cache` for future runs.
+converts the amount into that account's currency so the GnuCash split quantity is expressed in the currency the account
+is actually denominated in.
+
+Rates are always those of the **transaction's own date**, never today's — a split records what something was worth when
+it happened, so re-importing an old transaction cannot restate it. They are resolved in this order:
+
+1. **The rate the bank actually charged.** When the source reports the operation in the counterpart account's own
+   currency, that amount is used verbatim. It is exact, so no lookup happens at all. Note this applies only when the two
+   currencies coincide: the bank's *operation* currency is whatever it executed the payment in, which need not match the
+   counterpart account.
+2. **ECB daily reference rates** ([frankfurter.dev](https://frankfurter.dev)) for every pair they cover. These are
+   market reference rates. ECB fixes on business days, so a weekend transaction uses the preceding fixing.
+3. **National Bank of Ukraine rates** for hryvnia pairs, which ECB does not publish. NBU sets a rate for every calendar
+   day.
+
+Rates are fetched once per date and cached in `rate_history`, which never expires because a past date's rate does not
+change. Because ECB and NBU cover disjoint pairs, neither can override the other.
+
+If a date has no published rate yet (typically the current day) or the rate services are unreachable, gnucashsync falls
+back to the current Monobank rate from `currency_cache` and logs a warning naming the date. If no rate can be resolved
+at all, the import fails rather than recording a quantity in the wrong currency.
 
 ## Duplicate detection
 

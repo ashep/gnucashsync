@@ -618,3 +618,152 @@ accounts:
 		t.Errorf("got %q, want %q", got, config.SkipAccount)
 	}
 }
+
+// TestConvertAmount_UsesInversePair verifies that a pair cached in only one
+// direction still converts the other way. Monobank quotes EUR/USD but never
+// USD/EUR, so without this a EUR→USD conversion would find no rate at all.
+func TestConvertAmount_UsesInversePair(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.SetRate("EUR", "USD", decimal.NewFromFloat(1.161))
+
+	got, ok := cfg.ConvertAmount(decimal.NewFromFloat(-235.34), "EUR", "USD")
+	if !ok {
+		t.Fatal("expected direct EUR/USD pair to convert")
+	}
+	if want := decimal.NewFromFloat(-273.23); !got.Round(2).Equal(want) {
+		t.Errorf("EUR→USD: got %s, want %s", got.Round(2), want)
+	}
+
+	got, ok = cfg.ConvertAmount(decimal.NewFromFloat(-273.23), "USD", "EUR")
+	if !ok {
+		t.Fatal("expected inverse USD/EUR conversion via the cached EUR/USD pair")
+	}
+	if want := decimal.NewFromFloat(-235.34); !got.Round(2).Equal(want) {
+		t.Errorf("USD→EUR: got %s, want %s", got.Round(2), want)
+	}
+}
+
+// TestConvertAmount_NoRate verifies an uncached pair reports failure instead of
+// returning the amount unconverted.
+func TestConvertAmount_NoRate(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.SetRate("EUR", "USD", decimal.NewFromFloat(1.161))
+
+	if _, ok := cfg.ConvertAmount(decimal.NewFromInt(100), "CHF", "USD"); ok {
+		t.Error("expected CHF→USD to fail with no CHF rate cached")
+	}
+	if got, ok := cfg.ConvertAmount(decimal.NewFromInt(100), "USD", "USD"); !ok || !got.Equal(decimal.NewFromInt(100)) {
+		t.Errorf("same-currency conversion should be identity, got %s ok=%v", got, ok)
+	}
+}
+
+// TestConvertAmount_TriangulatesViaHryvnia verifies that a cross rate is derived
+// through UAH. NBU quotes every currency against the hryvnia only, so EUR→USD
+// exists solely as EUR/UAH ÷ USD/UAH.
+func TestConvertAmount_TriangulatesViaHryvnia(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.SetRate("EUR", "UAH", decimal.RequireFromString("52.008"))
+	cfg.SetRate("USD", "UAH", decimal.RequireFromString("44.5717"))
+
+	got, ok := cfg.ConvertAmount(decimal.RequireFromString("-235.34"), "EUR", "USD")
+	if !ok {
+		t.Fatal("expected EUR→USD to triangulate through UAH")
+	}
+	// 235.34 × 52.008 / 44.5717 = 274.60
+	if want := decimal.RequireFromString("-274.60"); !got.Round(2).Equal(want) {
+		t.Errorf("EUR→USD: got %s, want %s", got.Round(2), want)
+	}
+}
+
+// TestConvertAmountOn_UsesDateSpecificRates verifies that a conversion for a
+// given date uses that date's recorded rates and ignores the current ones.
+func TestConvertAmountOn_UsesDateSpecificRates(t *testing.T) {
+	day := time.Date(2026, 8, 27, 10, 59, 0, 0, time.UTC)
+	cfg := &config.Config{}
+	// A wildly different "current" rate that must not be used.
+	cfg.SetRate("EUR", "USD", decimal.RequireFromString("2.0"))
+	cfg.SetHistoricalRates(day, map[string]decimal.Decimal{
+		"EUR/UAH": decimal.RequireFromString("52.008"),
+		"USD/UAH": decimal.RequireFromString("44.5717"),
+	})
+
+	got, ok := cfg.ConvertAmountOn(decimal.RequireFromString("-235.34"), "EUR", "USD", day)
+	if !ok {
+		t.Fatal("expected the historical rates for 2026-08-27 to be used")
+	}
+	if want := decimal.RequireFromString("-274.60"); !got.Round(2).Equal(want) {
+		t.Errorf("got %s, want %s", got.Round(2), want)
+	}
+
+	// A date with no recorded rates must report failure, not silently fall back.
+	other := time.Date(2026, 8, 28, 0, 0, 0, 0, time.UTC)
+	if _, ok := cfg.ConvertAmountOn(decimal.NewFromInt(1), "EUR", "USD", other); ok {
+		t.Error("expected no conversion for a date with no recorded rates")
+	}
+	if cfg.HasHistoricalRates(other) {
+		t.Error("HasHistoricalRates should be false for an unrecorded date")
+	}
+	if !cfg.HasHistoricalRates(day) {
+		t.Error("HasHistoricalRates should be true for a recorded date")
+	}
+}
+
+// TestSaveRates_PersistsRateHistoryAndPreservesFormatting verifies that the new
+// rate_history section round-trips through the file without disturbing the rest
+// of the user's config.
+func TestSaveRates_PersistsRateHistoryAndPreservesFormatting(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/config.yaml"
+	original := `book: /books/my.gnucash
+
+accounts:
+  # my card
+  - source_id: "UA123"
+    gnucash_account: "Assets:Card"
+`
+	if err := os.WriteFile(path, []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.SetRate("USD", "UAH", decimal.RequireFromString("44.44"))
+	cfg.SetHistoricalRates(time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC), map[string]decimal.Decimal{
+		"USD/UAH": decimal.RequireFromString("44.5717"),
+	})
+	if err := cfg.SaveRates(); err != nil {
+		t.Fatal(err)
+	}
+
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(saved)
+	for _, want := range []string{
+		"book: /books/my.gnucash",
+		"  # my card",
+		`    gnucash_account: "Assets:Card"`,
+		"currency_cache:",
+		"rate_history:",
+		"2026-08-27",
+		"44.5717",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("saved config missing %q:\n%s", want, got)
+		}
+	}
+
+	reloaded, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reloaded.HasHistoricalRates(time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC)) {
+		t.Error("rate_history did not survive a save/load round trip")
+	}
+	if len(reloaded.Accounts) != 1 {
+		t.Errorf("accounts lost on save: %+v", reloaded.Accounts)
+	}
+}

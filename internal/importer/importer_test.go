@@ -30,7 +30,7 @@ const sampleXML = `<?xml version="1.0" encoding="utf-8" ?>
 <gnc:count-data cd:type="book">1</gnc:count-data>
 <gnc:book version="2.0.0">
 <book:id type="guid">a0000000000000000000000000000000</book:id>
-<gnc:count-data cd:type="account">5</gnc:count-data>
+<gnc:count-data cd:type="account">6</gnc:count-data>
 <gnc:count-data cd:type="transaction">0</gnc:count-data>
 <gnc:account version="2.0.0">
   <act:name>Root Account</act:name>
@@ -66,6 +66,14 @@ const sampleXML = `<?xml version="1.0" encoding="utf-8" ?>
   <act:id type="guid">a0000000000000000000000000000005</act:id>
   <act:type>ASSET</act:type>
   <act:commodity><cmdty:space>ISO4217</cmdty:space><cmdty:id>USD</cmdty:id></act:commodity>
+  <act:commodity-scu>100</act:commodity-scu>
+  <act:parent type="guid">a0000000000000000000000000000002</act:parent>
+</gnc:account>
+<gnc:account version="2.0.0">
+  <act:name>Monobank EUR</act:name>
+  <act:id type="guid">a0000000000000000000000000000006</act:id>
+  <act:type>ASSET</act:type>
+  <act:commodity><cmdty:space>ISO4217</cmdty:space><cmdty:id>EUR</cmdty:id></act:commodity>
   <act:commodity-scu>100</act:commodity-scu>
   <act:parent type="guid">a0000000000000000000000000000002</act:parent>
 </gnc:account>
@@ -431,7 +439,7 @@ func TestRun_SinceFilter(t *testing.T) {
 // the credit split quantity is written in USD, not UAH.
 func TestRun_CrossCurrency_UsesRateFromCache(t *testing.T) {
 	path := writeSampleBook(t)
-	_, err := importer.Run(source.NewSlice(crossCurrencyTxns()), path, crossCurrencyConfig(true), importer.Options{})
+	_, err := importer.Run(source.NewSlice(crossCurrencyTxns()), path, crossCurrencyConfig(true), importer.Options{HistoricalRateFetcher: noHistoricalRates})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -458,7 +466,7 @@ func TestRun_CrossCurrency_FetchesRateWhenMissing(t *testing.T) {
 		}, nil
 	}
 
-	_, err := importer.Run(source.NewSlice(crossCurrencyTxns()), path, cfg, importer.Options{RateFetcher: fakeFetcher})
+	_, err := importer.Run(source.NewSlice(crossCurrencyTxns()), path, cfg, importer.Options{RateFetcher: fakeFetcher, HistoricalRateFetcher: noHistoricalRates})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -494,7 +502,7 @@ func TestRun_CrossCurrency_RefetchesExpiredRate(t *testing.T) {
 		}, nil
 	}
 
-	_, err := importer.Run(source.NewSlice(crossCurrencyTxns()), path, cfg, importer.Options{RateFetcher: fakeFetcher})
+	_, err := importer.Run(source.NewSlice(crossCurrencyTxns()), path, cfg, importer.Options{RateFetcher: fakeFetcher, HistoricalRateFetcher: noHistoricalRates})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -508,5 +516,274 @@ func TestRun_CrossCurrency_RefetchesExpiredRate(t *testing.T) {
 	}
 	if !rate.Equal(decimal.NewFromFloat(41.5)) {
 		t.Errorf("cached rate: expected 41.5, got %s", rate)
+	}
+}
+
+// eurTaxTxn reproduces a Monobank tax debit: the account is in EUR, but the
+// bank executed the payment in UAH and reports it as the operation currency.
+// The counterpart expense account is in USD, so neither the transaction
+// currency nor the operation currency is what the counterpart split needs.
+func eurTaxTxn() []model.Transaction {
+	return []model.Transaction{
+		{
+			ID:                "txn-tax",
+			Date:              time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC),
+			Description:       "101 ЕН 5% за 08/2026",
+			Amount:            decimal.NewFromFloat(-235.34),
+			Currency:          "EUR",
+			OperationAmount:   decimal.NewFromFloat(-12160),
+			OperationCurrency: "UAH",
+			AccountID:         "UA-EUR",
+			Category:          "4829",
+		},
+	}
+}
+
+func eurTaxConfig() *config.Config {
+	cfg := &config.Config{
+		Accounts: []config.AccountEntry{
+			{
+				SourceID:       "UA-EUR",
+				GnuCashAccount: "Assets:Monobank EUR",
+				MCCRules:       map[string]string{"4829": "Assets:Savings USD"},
+			},
+		},
+	}
+	// Monobank publishes EUR/USD (1 EUR = 1.161 USD) and never USD/EUR.
+	cfg.SetRate("EUR", "USD", decimal.NewFromFloat(1.161))
+	return cfg
+}
+
+// TestRun_OperationCurrencyDiffersFromCounterpart verifies that when the bank's
+// operation currency (UAH) is neither the transaction currency (EUR) nor the
+// counterpart account's currency (USD), the counterpart split quantity is
+// converted into the counterpart account's currency instead of copying the
+// bank's foreign amount verbatim.
+func TestRun_OperationCurrencyDiffersFromCounterpart(t *testing.T) {
+	path := writeSampleBook(t)
+	_, err := importer.Run(source.NewSlice(eurTaxTxn()), path, eurTaxConfig(), importer.Options{HistoricalRateFetcher: noHistoricalRates})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	raw := string(readBookRaw(t, path))
+	// -235.34 EUR × 1.161 = -273.23 USD → credit quantity +27323/100.
+	if !strings.Contains(raw, "<split:quantity>27323/100</split:quantity>") {
+		t.Error("expected USD credit quantity 27323/100 in book XML")
+	}
+	if strings.Contains(raw, "1216000/100") {
+		t.Error("UAH operation amount 1216000/100 leaked into the book as a USD quantity")
+	}
+}
+
+// TestRun_OperationCurrencyMatchesCounterpart verifies the case the operation
+// amount is actually meant for: it is used verbatim when the bank's operation
+// currency equals the counterpart account's currency, with no rate lookup.
+func TestRun_OperationCurrencyMatchesCounterpart(t *testing.T) {
+	path := writeSampleBook(t)
+	txns := []model.Transaction{
+		{
+			ID:                "txn-op-usd",
+			Date:              time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC),
+			Description:       "USD purchase",
+			Amount:            decimal.NewFromFloat(-4150),
+			Currency:          "UAH",
+			OperationAmount:   decimal.NewFromFloat(-99),
+			OperationCurrency: "USD",
+			AccountID:         "UA123",
+			Category:          "6011",
+		},
+	}
+	cfg := crossCurrencyConfig(false) // no rates cached at all
+	_, err := importer.Run(source.NewSlice(txns), path, cfg, importer.Options{
+		RateFetcher: func() (map[string]decimal.Decimal, error) {
+			t.Error("RateFetcher must not be called when the operation currency already matches")
+			return nil, nil
+		},
+		HistoricalRateFetcher: func(time.Time) (map[string]decimal.Decimal, error) {
+			t.Error("rates must not be looked up when the operation currency already matches")
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	raw := string(readBookRaw(t, path))
+	if !strings.Contains(raw, "<split:quantity>9900/100</split:quantity>") {
+		t.Error("expected USD credit quantity 9900/100 in book XML")
+	}
+}
+
+// TestRun_OperationCurrencyIgnoredForSameCurrencyCounterpart verifies that a
+// foreign operation currency is ignored when the counterpart account is in the
+// transaction's own currency: quantity must then equal value.
+func TestRun_OperationCurrencyIgnoredForSameCurrencyCounterpart(t *testing.T) {
+	path := writeSampleBook(t)
+	txns := []model.Transaction{
+		{
+			ID:                "txn-uah-exp",
+			Date:              time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC),
+			Description:       "Grocery abroad",
+			Amount:            decimal.NewFromFloat(-450),
+			Currency:          "UAH",
+			OperationAmount:   decimal.NewFromFloat(-10),
+			OperationCurrency: "USD",
+			AccountID:         "UA123",
+			Category:          "5411", // → Imbalance-UAH, a UAH account
+		},
+	}
+	_, err := importer.Run(source.NewSlice(txns), path, sampleConfig(), importer.Options{HistoricalRateFetcher: noHistoricalRates})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	raw := string(readBookRaw(t, path))
+	if !strings.Contains(raw, "<split:quantity>45000/100</split:quantity>") {
+		t.Error("expected UAH credit quantity 45000/100 in book XML")
+	}
+	if strings.Contains(raw, "1000/100") {
+		t.Error("USD operation amount 1000/100 leaked into the book as a UAH quantity")
+	}
+}
+
+// TestRun_NoRateAvailable verifies the importer refuses to write a quantity it
+// cannot express in the counterpart account's currency, rather than silently
+// recording a wrong number.
+func TestRun_NoRateAvailable(t *testing.T) {
+	path := writeSampleBook(t)
+	cfg := eurTaxConfig()
+	cfg.CurrencyCache = nil // no rates, and the fetcher returns none either
+
+	_, err := importer.Run(source.NewSlice(eurTaxTxn()), path, cfg, importer.Options{
+		RateFetcher: func() (map[string]decimal.Decimal, error) {
+			return map[string]decimal.Decimal{}, nil
+		},
+		HistoricalRateFetcher: noHistoricalRates,
+	})
+	if err == nil {
+		t.Fatal("expected an error when no EUR→USD rate is available")
+	}
+	if !strings.Contains(err.Error(), "EUR") || !strings.Contains(err.Error(), "USD") {
+		t.Errorf("error should name the currency pair, got: %v", err)
+	}
+}
+
+// noHistoricalRates stubs the NBU fetcher as having nothing for the date, which
+// is what happens for a day the bank has not published yet.
+func noHistoricalRates(time.Time) (map[string]decimal.Decimal, error) {
+	return map[string]decimal.Decimal{}, nil
+}
+
+// TestRun_UsesRateFromTransactionDate verifies the counterpart quantity is
+// converted at the rate that stood on the transaction's own date, not at the
+// current rate.
+func TestRun_UsesRateFromTransactionDate(t *testing.T) {
+	path := writeSampleBook(t)
+	cfg := eurTaxConfig() // current EUR/USD = 1.161
+
+	var askedFor []string
+	fetcher := func(d time.Time) (map[string]decimal.Decimal, error) {
+		askedFor = append(askedFor, d.Format("2006-01-02"))
+		return map[string]decimal.Decimal{
+			// ECB market rate for the pair, alongside NBU's hryvnia rates. The
+			// direct pair must win over a cross derived from the UAH legs
+			// (52.008 / 44.5717 = 1.16684).
+			"EUR/USD": decimal.RequireFromString("1.1645"),
+			"EUR/UAH": decimal.RequireFromString("52.008"),
+			"USD/UAH": decimal.RequireFromString("44.5717"),
+		}, nil
+	}
+
+	_, err := importer.Run(source.NewSlice(eurTaxTxn()), path, cfg, importer.Options{
+		HistoricalRateFetcher: fetcher,
+		RateFetcher: func() (map[string]decimal.Decimal, error) {
+			t.Error("current rates must not be fetched when the date's rates resolve")
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(askedFor) != 1 || askedFor[0] != "2026-08-27" {
+		t.Errorf("expected one lookup for 2026-08-27, got %v", askedFor)
+	}
+	raw := string(readBookRaw(t, path))
+	// 235.34 EUR × 1.1645 = 274.05 USD (ECB reference rate for 2026-08-27).
+	if !strings.Contains(raw, "<split:quantity>27405/100</split:quantity>") {
+		t.Error("expected USD credit quantity 27405/100 (rate of 2026-08-27) in book XML")
+	}
+	if strings.Contains(raw, "27460/100") {
+		t.Error("used a cross rate derived from the UAH legs instead of the direct EUR/USD rate")
+	}
+	if !cfg.HasHistoricalRates(time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC)) {
+		t.Error("expected the fetched rates to be cached in config")
+	}
+}
+
+// TestRun_FetchesHistoricalRatesOncePerDate verifies that many transactions
+// sharing a date cost a single rate lookup.
+func TestRun_FetchesHistoricalRatesOncePerDate(t *testing.T) {
+	path := writeSampleBook(t)
+
+	txns := eurTaxTxn()
+	extra := txns[0]
+	extra.ID = "txn-tax-2"
+	extra.Amount = decimal.NewFromFloat(-47.07)
+	txns = append(txns, extra)
+
+	calls := 0
+	_, err := importer.Run(source.NewSlice(txns), path, eurTaxConfig(), importer.Options{
+		HistoricalRateFetcher: func(time.Time) (map[string]decimal.Decimal, error) {
+			calls++
+			return map[string]decimal.Decimal{
+				"EUR/UAH": decimal.RequireFromString("52.008"),
+				"USD/UAH": decimal.RequireFromString("44.5717"),
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Errorf("expected 1 historical rate fetch for 2 transactions on one date, got %d", calls)
+	}
+}
+
+// TestRun_FallsBackToCurrentRateWhenDateUnpublished verifies that a date NBU has
+// not published yet still imports, using the current rate.
+func TestRun_FallsBackToCurrentRateWhenDateUnpublished(t *testing.T) {
+	path := writeSampleBook(t)
+
+	_, err := importer.Run(source.NewSlice(eurTaxTxn()), path, eurTaxConfig(), importer.Options{
+		HistoricalRateFetcher: noHistoricalRates,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	raw := string(readBookRaw(t, path))
+	// Falls back to the cached current rate of 1.161 → 235.34 × 1.161 = 273.23.
+	if !strings.Contains(raw, "<split:quantity>27323/100</split:quantity>") {
+		t.Error("expected fallback to the current rate (27323/100) in book XML")
+	}
+}
+
+// TestRun_HistoricalRateFetchErrorFallsBack verifies that an unreachable rate
+// service degrades to the current rate instead of failing the whole import.
+func TestRun_HistoricalRateFetchErrorFallsBack(t *testing.T) {
+	path := writeSampleBook(t)
+
+	_, err := importer.Run(source.NewSlice(eurTaxTxn()), path, eurTaxConfig(), importer.Options{
+		HistoricalRateFetcher: func(time.Time) (map[string]decimal.Decimal, error) {
+			return nil, fmt.Errorf("bank.gov.ua unreachable")
+		},
+	})
+	if err != nil {
+		t.Fatalf("a rate-service outage should not fail the import: %v", err)
+	}
+	if !strings.Contains(string(readBookRaw(t, path)), "<split:quantity>27323/100</split:quantity>") {
+		t.Error("expected fallback to the current rate (27323/100) in book XML")
 	}
 }

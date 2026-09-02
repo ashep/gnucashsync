@@ -22,6 +22,10 @@ type Options struct {
 	Until         time.Time // zero means no filter
 	AccountFilter string    // non-empty: only import this source_id
 	RateFetcher   func() (map[string]decimal.Decimal, error)
+	// HistoricalRateFetcher returns the rates in effect on a given date, keyed
+	// "FROM/TO". An empty result means that date has no published rates yet,
+	// which is not an error.
+	HistoricalRateFetcher func(time.Time) (map[string]decimal.Decimal, error)
 }
 
 // Result summarizes an import run.
@@ -62,6 +66,7 @@ func Run(src source.Source, gnucashPath string, cfg *config.Config, opts Options
 		result  Result
 		txnXMLs []string
 	)
+	rates := &rateResolver{cfg: cfg, opts: opts, triedDates: map[string]bool{}}
 
 	for _, t := range txns {
 		if opts.AccountFilter != "" && t.AccountID != opts.AccountFilter {
@@ -124,39 +129,32 @@ func Run(src source.Source, gnucashPath string, cfg *config.Config, opts Options
 			return Result{}, err
 		}
 
-		opAmount := t.OperationAmount
-		opCurrency := t.OperationCurrency
-
-		// If Monobank did not supply a foreign-currency amount, check whether
-		// the counterpart GnuCash account is in a different currency and compute
-		// the quantity from the cached (or freshly fetched) exchange rate.
-		if opCurrency == "" {
-			if counterpart, ok := gnucash.AccountByGUID(book, creditGUID); ok && counterpart.Currency != t.Currency {
-				rate, cached := cfg.GetRate(counterpart.Currency, t.Currency)
-				if !cached {
-					fetcher := opts.RateFetcher
-					if fetcher == nil {
-						fetcher = source.FetchRates
+		// The counterpart split's quantity has to be expressed in the counterpart
+		// account's own currency. The bank's operation currency is a different
+		// thing: it is whatever currency the bank executed the operation in, and
+		// it only happens to coincide most of the time. A tax debited in UAH from
+		// a EUR account, for example, is reported by Monobank in UAH while the
+		// counterpart expense account is in USD — copying the operation amount
+		// there would record hryvnias as dollars.
+		var (
+			opAmount   decimal.Decimal
+			opCurrency string
+		)
+		if counterpart, ok := gnucash.AccountByGUID(book, creditGUID); ok && counterpart.Currency != t.Currency {
+			switch {
+			case t.OperationCurrency == counterpart.Currency:
+				opAmount, opCurrency = t.OperationAmount, counterpart.Currency
+			default:
+				converted, err := rates.convert(t.Amount, t.Currency, counterpart.Currency, t.Date)
+				if err != nil {
+					if !opts.DryRun {
+						return Result{}, err
 					}
-					rates, err := fetcher()
-					if err != nil {
-						return Result{}, fmt.Errorf("fetching exchange rates: %w", err)
-					}
-					for k, v := range rates {
-						// parse "FROM/TO" key and store in config cache
-						if len(k) == 7 && k[3] == '/' {
-							cfg.SetRate(k[:3], k[4:], v)
-						}
-					}
-					if err := cfg.SaveCurrencyCache(); err != nil {
-						log.Printf("warning: could not save rate cache: %v", err)
-					}
-					rate = cfg.GetRateOrZero(counterpart.Currency, t.Currency)
+					log.Printf("warning: %v — skipping transaction %q", err, t.ID)
+					result.SkippedUnmapped++
+					continue
 				}
-				if !rate.IsZero() {
-					opAmount = t.Amount.Div(rate)
-					opCurrency = counterpart.Currency
-				}
+				opAmount, opCurrency = converted.Round(2), counterpart.Currency
 			}
 		}
 
@@ -179,4 +177,99 @@ func Run(src source.Source, gnucashPath string, cfg *config.Config, opts Options
 	}
 
 	return result, nil
+}
+
+// rateResolver converts amounts between currencies for one import run, and
+// remembers which lookups it has already made so a run costs one request per
+// date rather than one per transaction.
+type rateResolver struct {
+	cfg          *config.Config
+	opts         Options
+	triedDates   map[string]bool
+	triedCurrent bool
+}
+
+// convert expresses amount in the `to` currency at the rate that stood on date.
+//
+// A GnuCash split records what something was worth when it happened, so the
+// rate of the transaction's own day is the correct one — using today's rate
+// would restate past entries every time they were re-imported. When that day
+// has no published rate yet (it is still today, or the rate service is down)
+// the current rate is used instead and the substitution is logged.
+//
+// Note this is only reached when the transaction itself does not already answer
+// the question: a bank that reports the operation in the counterpart account's
+// own currency has given the exact amount it charged, and that is always used
+// in preference to any published rate.
+func (r *rateResolver) convert(amount decimal.Decimal, from, to string, date time.Time) (decimal.Decimal, error) {
+	if converted, ok := r.cfg.ConvertAmountOn(amount, from, to, date); ok {
+		return converted, nil
+	}
+
+	if !r.cfg.HasHistoricalRates(date) && !r.triedDates[date.Format(time.DateOnly)] {
+		r.triedDates[date.Format(time.DateOnly)] = true
+
+		fetcher := r.opts.HistoricalRateFetcher
+		if fetcher == nil {
+			fetcher = source.FetchHistoricalRates
+		}
+		switch fetched, err := fetcher(date); {
+		case err != nil:
+			log.Printf("warning: could not fetch exchange rates for %s: %v", date.Format(time.DateOnly), err)
+		case len(fetched) > 0:
+			r.cfg.SetHistoricalRates(date, fetched)
+			if err := r.cfg.SaveRates(); err != nil {
+				log.Printf("warning: could not save rate cache: %v", err)
+			}
+			if converted, ok := r.cfg.ConvertAmountOn(amount, from, to, date); ok {
+				return converted, nil
+			}
+		}
+	}
+
+	converted, err := r.convertAtCurrentRate(amount, from, to)
+	if err != nil {
+		return decimal.Zero, err
+	}
+	log.Printf("warning: no %s/%s rate published for %s; using the current rate instead",
+		from, to, date.Format(time.DateOnly))
+	return converted, nil
+}
+
+// convertAtCurrentRate converts at today's rates, fetching and caching them when
+// the cache cannot answer. It returns an error rather than a zero or unconverted
+// amount when no rate is available: writing a quantity in the wrong currency
+// silently corrupts the ledger.
+func (r *rateResolver) convertAtCurrentRate(amount decimal.Decimal, from, to string) (decimal.Decimal, error) {
+	if converted, ok := r.cfg.ConvertAmount(amount, from, to); ok {
+		return converted, nil
+	}
+	if r.triedCurrent {
+		return decimal.Zero, fmt.Errorf("no exchange rate available for %s/%s", from, to)
+	}
+	r.triedCurrent = true
+
+	fetcher := r.opts.RateFetcher
+	if fetcher == nil {
+		fetcher = source.FetchRates
+	}
+	fetched, err := fetcher()
+	if err != nil {
+		return decimal.Zero, fmt.Errorf("fetching exchange rates: %w", err)
+	}
+	for k, v := range fetched {
+		// parse "FROM/TO" key and store in config cache
+		if len(k) == 7 && k[3] == '/' {
+			r.cfg.SetRate(k[:3], k[4:], v)
+		}
+	}
+	if err := r.cfg.SaveRates(); err != nil {
+		log.Printf("warning: could not save rate cache: %v", err)
+	}
+
+	converted, ok := r.cfg.ConvertAmount(amount, from, to)
+	if !ok {
+		return decimal.Zero, fmt.Errorf("no exchange rate available for %s/%s", from, to)
+	}
+	return converted, nil
 }
